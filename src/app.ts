@@ -10,7 +10,7 @@ import { healthRoutes } from "./routes/health.routes";
 
 export const app = express();
 
-app.use(helmet());
+app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
 app.use((req, _res, next) => {
   console.log("[request]", {
     timestamp: new Date().toISOString(),
@@ -22,13 +22,13 @@ app.use((req, _res, next) => {
   next();
 });
 app.use(cors({
-  origin: true,
+  origin: "*",
   methods: ["GET", "POST", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Accept"],
   credentials: false
 }));
 app.options("*", cors({
-  origin: true,
+  origin: "*",
   methods: ["GET", "POST", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Accept"],
   credentials: false

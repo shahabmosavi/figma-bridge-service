@@ -74,10 +74,10 @@ export const completeDesignJob = async (
   const updatedJob: DesignJob = {
     ...job,
     status: "completed",
-    figmaFileKey: input.figmaFileKey,
-    figmaFileUrl: input.figmaFileUrl,
     figmaFrameId: input.figmaFrameId,
-    figmaFrameUrl: input.figmaFrameUrl,
+    figmaFileKey: input.figmaFileKey ?? undefined,
+    figmaFileUrl: input.figmaFileUrl ?? undefined,
+    figmaFrameUrl: input.figmaFrameUrl ?? undefined,
     failureReason: undefined,
     updatedAt: new Date().toISOString()
   };

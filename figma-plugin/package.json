@@ -1,0 +1,14 @@
+{
+  "name": "ai-design-jobs-figma-plugin",
+  "version": "0.1.0",
+  "description": "Local Figma plugin MVP for creating draft frames from figma-bridge-service jobs.",
+  "private": true,
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "watch": "tsc -p tsconfig.json --watch"
+  },
+  "devDependencies": {
+    "@figma/plugin-typings": "^1.108.0",
+    "typescript": "^5.7.2"
+  }
+}

@@ -483,3 +483,49 @@ Or the domain endpoint:
 ```text
 figmaBridgeUrl = https://YOUR_DOMAIN/figma/create-design-draft
 ```
+
+## Debugging Figma Plugin Network Issues
+
+If the Figma plugin shows `Backend request failed: Failed to fetch`, first confirm the public tunnel works from a browser:
+
+```text
+https://drinking-ragged-dense.ngrok-free.dev/health
+```
+
+Expected response:
+
+```json
+{
+  "status": "ok",
+  "service": "figma-bridge-service"
+}
+```
+
+Inside the Figma plugin, use the `Test Health` button. The plugin UI includes a debug panel that logs the backend URL, exact request URL, fetch start and resolution, HTTP status, response text, parsed JSON, and full fetch errors.
+
+Check ngrok logs on the VPS:
+
+```bash
+journalctl -u ngrok-figma-bridge -f
+```
+
+Check backend logs:
+
+```bash
+docker compose logs -f figma-bridge-service
+```
+
+The backend logs request metadata for every request, including method, URL, origin, user-agent, and timestamp. It also logs `/health`, `/figma/jobs/pending`, and the number of pending jobs returned.
+
+Use this endpoint to inspect request headers reaching the backend:
+
+```text
+https://drinking-ragged-dense.ngrok-free.dev/debug/request-info
+```
+
+Debugging guide:
+
+- If the browser works but plugin requests do not appear in ngrok logs, suspect Figma `manifest.json` `networkAccess.allowedDomains` or the plugin runtime.
+- If ngrok receives the request but the backend rejects it, inspect CORS logs and the response status.
+- If the backend receives the request and returns `200` but the plugin still fails, inspect the plugin debug panel for response parsing and UI errors.
+- After changing `manifest.json`, re-import the plugin in Figma from `figma-plugin/manifest.json` so network permissions refresh.

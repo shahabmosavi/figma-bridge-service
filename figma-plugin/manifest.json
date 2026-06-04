@@ -1,0 +1,16 @@
+{
+  "name": "AI Design Jobs",
+  "id": "ai-design-jobs-mvp",
+  "api": "1.0.0",
+  "main": "code.js",
+  "ui": "ui.html",
+  "editorType": [
+    "figma"
+  ],
+  "networkAccess": {
+    "allowedDomains": [
+      "https://drinking-ragged-dense.ngrok-free.dev"
+    ],
+    "reasoning": "The plugin needs to connect to the Figma Bridge backend to fetch pending AI design jobs and mark jobs as completed or failed."
+  }
+}

@@ -37,7 +37,16 @@ export const getPendingJobs = async (
   next: NextFunction
 ) => {
   try {
+    console.log("[figma/jobs/pending] called", {
+      timestamp: new Date().toISOString()
+    });
+
     const jobs = await listPendingDesignJobs();
+    console.log("[figma/jobs/pending] returning pending jobs", {
+      timestamp: new Date().toISOString(),
+      count: jobs.length
+    });
+
     return res.status(200).json({
       success: true,
       jobs

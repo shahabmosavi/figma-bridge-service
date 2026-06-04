@@ -19,10 +19,10 @@ export const createDesignDraftSchema = z.object({
 export type CreateDesignDraftInput = z.infer<typeof createDesignDraftSchema>;
 
 export const completeDesignJobSchema = z.object({
-  figmaFileKey: requiredText,
-  figmaFileUrl: requiredText,
   figmaFrameId: requiredText,
-  figmaFrameUrl: optionalText
+  figmaFileKey: z.string().trim().min(1).nullish(),
+  figmaFileUrl: z.string().trim().min(1).nullish(),
+  figmaFrameUrl: z.string().trim().min(1).nullish()
 });
 
 export type CompleteDesignJobInput = z.infer<typeof completeDesignJobSchema>;

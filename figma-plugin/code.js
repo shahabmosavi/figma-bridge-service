@@ -36,10 +36,10 @@ figma.ui.onmessage = async (message) => {
         const frame = createDraftFrame(message.job);
         figma.currentPage.selection = [frame];
         figma.viewport.scrollAndZoomIntoView([frame]);
-        const figmaFileKey = figma.fileKey ? figma.fileKey : "";
+        const figmaFileKey = figma.fileKey || null;
         const encodedFrameId = encodeURIComponent(frame.id);
-        const figmaFileUrl = figmaFileKey ? `https://www.figma.com/file/${figmaFileKey}` : "";
-        const figmaFrameUrl = figmaFileKey ? `${figmaFileUrl}?node-id=${encodedFrameId}` : "";
+        const figmaFileUrl = figmaFileKey ? `https://www.figma.com/file/${figmaFileKey}` : null;
+        const figmaFrameUrl = figmaFileKey ? `https://www.figma.com/file/${figmaFileKey}?node-id=${encodedFrameId}` : null;
         figma.ui.postMessage({
             type: "frame-created",
             success: true,

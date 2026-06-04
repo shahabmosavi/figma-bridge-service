@@ -359,13 +359,13 @@
 
       try {
         const completeUrl = BACKEND_BASE_URL + "/figma/jobs/" + encodeURIComponent(message.jobId) + "/complete";
+        const completePayload = { figmaFrameId: message.figmaFrameId };
+        if (message.figmaFileKey) completePayload.figmaFileKey = message.figmaFileKey;
+        if (message.figmaFileUrl) completePayload.figmaFileUrl = message.figmaFileUrl;
+        if (message.figmaFrameUrl) completePayload.figmaFrameUrl = message.figmaFrameUrl;
         logDebug("complete job URL", completeUrl);
-        await postJson(completeUrl, {
-          figmaFileKey: message.figmaFileKey || "",
-          figmaFileUrl: message.figmaFileUrl || "",
-          figmaFrameId: message.figmaFrameId || "",
-          figmaFrameUrl: message.figmaFrameUrl || ""
-        });
+        logDebug("complete job payload", completePayload);
+        await postJson(completeUrl, completePayload);
 
         setStatus("Figma draft created and backend job marked completed.", "success");
         await fetchPendingJobs();

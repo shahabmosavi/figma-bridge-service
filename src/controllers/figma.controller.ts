@@ -104,7 +104,9 @@ export const completeJob = async (
 
     return res.status(200).json({
       success: true,
-      job
+      status: "completed",
+      jobId: job.jobId,
+      frameId: job.figmaFrameId
     });
   } catch (error) {
     return next(error);

@@ -200,6 +200,7 @@
     const httpsWarningElement = document.getElementById("httpsWarning");
     const debugLogElement = document.getElementById("debugLog");
     const inFlightJobs = new Map();
+    const pendingFetches = new Map();
 
     backendUrlElement.textContent = BACKEND_BASE_URL;
     if (BACKEND_BASE_URL.indexOf("https://") !== 0) {
@@ -218,7 +219,8 @@
 
     logDebug("plugin loaded");
     logDebug("BACKEND_BASE_URL value", BACKEND_BASE_URL);
-    fetchPendingJobs();
+    logDebug("health URL", BACKEND_BASE_URL + "/health");
+    logDebug("pending jobs URL", BACKEND_BASE_URL + "/figma/jobs/pending");
 
     async function testHealth() {
       const healthUrl = BACKEND_BASE_URL + "/health";
@@ -320,6 +322,26 @@
         return;
       }
 
+      if (message.type === "fetch-response") {
+        const pending = pendingFetches.get(message.requestId);
+        if (!pending) {
+          return;
+        }
+        pendingFetches.delete(message.requestId);
+        if (message.error) {
+          const errMsg = typeof message.error === "string" ? message.error : JSON.stringify(message.error);
+          pending.reject(new TypeError(errMsg));
+          return;
+        }
+        const bodyText = message.text;
+        pending.resolve({
+          ok: message.ok,
+          status: message.status,
+          text: function () { return Promise.resolve(bodyText); }
+        });
+        return;
+      }
+
       logDebug("received plugin message", message);
 
       if (message.type === "frame-created") {
@@ -374,15 +396,28 @@
       }
     }
 
+    function pluginFetch(url, options) {
+      return new Promise(function (resolve, reject) {
+        const requestId = Date.now().toString(36) + Math.random().toString(36).slice(2);
+        pendingFetches.set(requestId, { resolve: resolve, reject: reject });
+        parent.postMessage({
+          pluginMessage: {
+            type: "fetch-request",
+            requestId: requestId,
+            url: url,
+            method: options.method || "GET",
+            headers: options.headers || {},
+            body: options.body
+          }
+        }, "*");
+      });
+    }
+
     async function fetchJson(url, label) {
       logDebug(label + " fetch started", { url: url });
-      const response = await fetch(url, {
+      const response = await pluginFetch(url, {
         method: "GET",
-        mode: "cors",
-        cache: "no-store",
-        headers: {
-          "Accept": "application/json"
-        }
+        headers: { "Accept": "application/json" }
       });
 
       logDebug(label + " fetch resolved");
@@ -393,14 +428,9 @@
 
     async function postJson(url, body) {
       logDebug("POST fetch started", { url: url, body: body });
-      const response = await fetch(url, {
+      const response = await pluginFetch(url, {
         method: "POST",
-        mode: "cors",
-        cache: "no-store",
-        headers: {
-          "Accept": "application/json",
-          "Content-Type": "application/json"
-        },
+        headers: { "Accept": "application/json", "Content-Type": "application/json" },
         body: JSON.stringify(body)
       });
 

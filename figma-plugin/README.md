@@ -31,6 +31,8 @@ The build creates `code.js`, which is the plugin entry file referenced by `manif
 3. Select this plugin's `manifest.json`.
 4. Run the plugin from `Plugins -> Development -> AI Design Jobs`.
 
+After any change to `manifest.json`, re-import the plugin from this same `figma-plugin/manifest.json` file so Figma refreshes network access permissions.
+
 ## Test
 
 1. Make sure `figma-bridge-service` is running.

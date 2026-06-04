@@ -3,6 +3,30 @@ const regularFont = { family: "Inter", style: "Regular" };
 const boldFont = { family: "Inter", style: "Bold" };
 figma.showUI(__html__, { width: 420, height: 640, themeColors: true });
 figma.ui.onmessage = async (message) => {
+    if (message.type === "fetch-request") {
+        const { requestId, url, method, headers, body } = message;
+        try {
+            const init = { method: method || "GET", headers: headers || {} };
+            if (body !== undefined) {
+                init.body = body;
+            }
+            const response = await fetch(url, init);
+            const text = await response.text();
+            figma.ui.postMessage({ type: "fetch-response", requestId, ok: response.ok, status: response.status, text });
+        }
+        catch (error) {
+            let errMsg;
+            if (error instanceof Error) {
+                errMsg = error.message;
+            } else if (error && typeof error === "object") {
+                errMsg = JSON.stringify(error);
+            } else {
+                errMsg = String(error);
+            }
+            figma.ui.postMessage({ type: "fetch-response", requestId, error: errMsg });
+        }
+        return;
+    }
     if (message.type !== "create-draft") {
         return;
     }

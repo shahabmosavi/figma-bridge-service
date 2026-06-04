@@ -4,6 +4,7 @@ import helmet from "helmet";
 import morgan from "morgan";
 
 import { debugRoutes } from "./routes/debug.routes";
+import { designSystemRoutes } from "./routes/design-system.routes";
 import { errorMiddleware, notFoundMiddleware } from "./middleware/error.middleware";
 import { figmaRoutes } from "./routes/figma.routes";
 import { healthRoutes } from "./routes/health.routes";
@@ -38,6 +39,7 @@ app.use(morgan("combined"));
 
 app.use("/health", healthRoutes);
 app.use("/debug", debugRoutes);
+app.use("/design-system", designSystemRoutes);
 app.use("/figma", figmaRoutes);
 
 app.use(notFoundMiddleware);

@@ -112,6 +112,46 @@ Expected response:
 }
 ```
 
+## Design Token Registry
+
+The bridge exposes a machine-readable MVP design token registry for future AI-generated Figma drafts.
+
+```bash
+curl http://localhost:3005/design-system/tokens
+```
+
+The endpoint returns the contents of `design-system/tokens.json` as JSON. Future AI agents and Figma-side draft generators should consume this registry as the design source of truth before creating new colors, typography sizes, spacing values, radius values, shadows, component names, state names, or Figma naming conventions.
+
+The registry is validated before it is returned. If a required top-level group is missing, the endpoint returns a clear error response instead of crashing.
+
+Required top-level groups:
+
+- `colors`
+- `typography`
+- `spacing`
+- `radius`
+- `shadows`
+- `components`
+- `states`
+- `figmaNaming`
+- `aiUsageRules`
+
+Example response excerpt:
+
+```json
+{
+  "colors": {
+    "brand": {
+      "primary": "#111827"
+    }
+  },
+  "spacing": [4, 8, 12, 16, 24, 32, 48, 64],
+  "aiUsageRules": [
+    "Use this token registry as the design source of truth."
+  ]
+}
+```
+
 ## Get A Job
 
 ```bash

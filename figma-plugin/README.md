@@ -12,6 +12,17 @@ Jira issue -> n8n workflow -> AI brief -> figma-bridge-service pending job -> Fi
 
 The backend owns job intake and job status. This plugin owns the Figma-side work: it uses the Figma Plugin API to create nodes in the file the designer already has open.
 
+## Draft Modes
+
+The plugin supports two draft modes:
+
+- `Screen Draft`: used for normal product screen jobs. It creates a product screen scaffold with the job title, issue key, target user, objective, required sections, required states, UX notes, acceptance criteria, and draft note.
+- `Design System`: used for design-system foundation jobs. It creates a structured Figma design system scaffold with color tokens, typography scale, spacing scale, radius and shadow examples, component placeholders, state rules, naming examples, AI usage rules, and draft note.
+
+Mode detection is automatic. The plugin checks the pending job brief fields, including `briefTitle`, `objective`, `figmaInstruction`, `requiredSections`, and `acceptanceCriteria`.
+
+If those fields contain design-system keywords such as `design system`, `design foundation`, `style guide`, `color rules`, `typography rules`, `spacing rules`, `component rules`, `Figma naming`, or `AI usage rules`, the job is treated as `Design System` mode. Otherwise, it uses `Screen Draft` mode.
+
 ## Build
 
 Install dependencies from this folder:
@@ -66,13 +77,21 @@ If browser requests work but ngrok shows no plugin request, suspect Figma manife
 
 ## What The Draft Creates
 
-The generated frame is named:
+For `Screen Draft` mode, the generated frame is named:
 
 ```text
 AI Draft - {issueKey} - {briefTitle}
 ```
 
 It is a `1440 x 1024` auto-layout frame with a neutral background, title, issue and target-user subtitle, section cards for the brief fields, and a final review note.
+
+For `Design System` mode, the generated frame is named:
+
+```text
+AI Design System - {issueKey} - {briefTitle}
+```
+
+It is a visual design system foundation scaffold placed to the right of existing top-level Figma frames so it does not overlap previous drafts.
 
 ## Known Limitations
 

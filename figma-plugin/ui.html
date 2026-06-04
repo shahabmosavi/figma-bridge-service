@@ -117,6 +117,22 @@
       color: #2563eb;
     }
 
+    .mode-badge {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      padding: 3px 8px;
+      font-size: 11px;
+      font-weight: 800;
+      color: #1d4ed8;
+      background: #dbeafe;
+    }
+
+    .mode-badge.screen {
+      color: #047857;
+      background: #d1fae5;
+    }
+
     h2 {
       margin: 0 0 8px;
       font-size: 15px;
@@ -201,6 +217,17 @@
     const debugLogElement = document.getElementById("debugLog");
     const inFlightJobs = new Map();
     const pendingFetches = new Map();
+    const designSystemKeywords = [
+      "design system",
+      "design foundation",
+      "style guide",
+      "color rules",
+      "typography rules",
+      "spacing rules",
+      "component rules",
+      "figma naming",
+      "ai usage rules"
+    ];
 
     backendUrlElement.textContent = BACKEND_BASE_URL;
     if (BACKEND_BASE_URL.indexOf("https://") !== 0) {
@@ -270,11 +297,15 @@
       }
 
       for (const job of jobs) {
+        const designSystemMode = isDesignSystemJob(job);
+        const modeLabel = designSystemMode ? "Design System" : "Screen Draft";
+        const modeClass = designSystemMode ? "mode-badge" : "mode-badge screen";
         const card = document.createElement("section");
         card.className = "card";
         card.innerHTML = `
             <div class="meta">
               <span class="issue">${escapeHtml(job.issueKey || "No issue")}</span>
+              <span class="${modeClass}">${modeLabel}</span>
               <span>${escapeHtml(formatDate(job.createdAt))}</span>
             </div>
             <h2>${escapeHtml(job.briefTitle || "Untitled design job")}</h2>
@@ -304,6 +335,10 @@
       button.textContent = "Creating...";
       setStatus("Creating Figma draft for " + (job.issueKey || job.jobId) + "...");
       logDebug("Create Figma Draft clicked", { jobId: job.jobId, issueKey: job.issueKey });
+      logDebug("draft mode selected before frame creation", {
+        jobId: job.jobId,
+        mode: isDesignSystemJob(job) ? "Design System Foundation" : "Screen Draft"
+      });
 
       parent.postMessage(
         {
@@ -521,6 +556,24 @@
       } catch (error) {
         return String(data);
       }
+    }
+
+    function isDesignSystemJob(job) {
+      const searchableText = [
+        job.briefTitle,
+        job.objective,
+        job.figmaInstruction,
+        job.requiredSections,
+        job.acceptanceCriteria
+      ].join(" ").toLowerCase();
+
+      for (const keyword of designSystemKeywords) {
+        if (searchableText.indexOf(keyword) >= 0) {
+          return true;
+        }
+      }
+
+      return false;
     }
 
     function formatDate(value) {

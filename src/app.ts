@@ -24,13 +24,13 @@ app.use((req, _res, next) => {
 app.use(cors({
   origin: "*",
   methods: ["GET", "POST", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Accept"],
+  allowedHeaders: ["Content-Type", "Accept", "ngrok-skip-browser-warning"],
   credentials: false
 }));
 app.options("*", cors({
   origin: "*",
   methods: ["GET", "POST", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Accept"],
+  allowedHeaders: ["Content-Type", "Accept", "ngrok-skip-browser-warning"],
   credentials: false
 }));
 app.use(express.json({ limit: "1mb" }));

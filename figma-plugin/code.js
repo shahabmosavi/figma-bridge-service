@@ -6,7 +6,7 @@ figma.ui.onmessage = async (message) => {
     if (message.type === "fetch-request") {
         const { requestId, url, method, headers, body } = message;
         try {
-            const init = { method: method || "GET", headers: headers || {} };
+            const init = { method: method || "GET", headers: Object.assign({ "ngrok-skip-browser-warning": "1" }, headers || {}) };
             if (body !== undefined) {
                 init.body = body;
             }

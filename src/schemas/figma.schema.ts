@@ -17,3 +17,18 @@ export const createDesignDraftSchema = z.object({
 });
 
 export type CreateDesignDraftInput = z.infer<typeof createDesignDraftSchema>;
+
+export const completeDesignJobSchema = z.object({
+  figmaFileKey: requiredText,
+  figmaFileUrl: requiredText,
+  figmaFrameId: requiredText,
+  figmaFrameUrl: optionalText
+});
+
+export type CompleteDesignJobInput = z.infer<typeof completeDesignJobSchema>;
+
+export const failDesignJobSchema = z.object({
+  reason: requiredText
+});
+
+export type FailDesignJobInput = z.infer<typeof failDesignJobSchema>;

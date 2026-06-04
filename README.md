@@ -1,8 +1,16 @@
 # figma-bridge-service
 
-Small Node.js Express service that receives design briefs from n8n and returns a mock Figma draft result.
+Small Node.js Express service that receives design briefs from n8n and stores them as pending Figma design jobs.
 
-This is a clean backend foundation for the future Figma API or Figma MCP integration. It does not create real Figma files yet.
+This MVP does not create real Figma files and does not return fake Figma URLs. It prepares the backend contract for a future Figma plugin that will pull pending jobs, create real Figma frames, and mark jobs completed.
+
+Current flow:
+
+```text
+n8n sends design brief -> bridge stores pending job -> Figma plugin pulls pending jobs -> plugin creates real Figma frames -> plugin marks job completed
+```
+
+Jobs are stored in memory for now, so they reset when the service restarts. Add durable storage in a later step before relying on this for production job history.
 
 ## Install Dependencies
 
@@ -45,7 +53,7 @@ Expected response:
 }
 ```
 
-## Create Figma Design Draft
+## Create Design Draft Job
 
 ```bash
 curl -X POST http://localhost:3005/figma/create-design-draft \
@@ -69,12 +77,112 @@ Expected response:
 ```json
 {
   "success": true,
+  "status": "pending",
+  "jobId": "3b3fa02d-8020-4ebd-98f6-f2cf199dfe33",
   "issueKey": "KAN-14",
-  "figma_url": "https://figma.com/file/mock-ai-design-draft",
-  "figma_file_id": "mock-file-id",
-  "figma_frame_id": "mock-frame-id",
   "briefTitle": "Design Instagram connection onboarding screen",
-  "message": "Mock Figma draft created successfully."
+  "message": "Design brief received. Waiting for Figma plugin to create the draft."
+}
+```
+
+## List Pending Jobs
+
+```bash
+curl http://localhost:3005/figma/jobs/pending
+```
+
+Expected response:
+
+```json
+{
+  "success": true,
+  "jobs": [
+    {
+      "jobId": "3b3fa02d-8020-4ebd-98f6-f2cf199dfe33",
+      "issueKey": "KAN-14",
+      "briefTitle": "Design Instagram connection onboarding screen",
+      "objective": "Design an onboarding screen that helps Instagram shop owners connect their Instagram page.",
+      "targetUser": "Instagram shop owner",
+      "figmaInstruction": "Create a Figma file with an onboarding screen...",
+      "status": "pending",
+      "createdAt": "2026-06-04T13:00:00.000Z",
+      "updatedAt": "2026-06-04T13:00:00.000Z"
+    }
+  ]
+}
+```
+
+## Get A Job
+
+```bash
+curl http://localhost:3005/figma/jobs/JOB_ID
+```
+
+If the job exists, the service returns:
+
+```json
+{
+  "success": true,
+  "job": {
+    "jobId": "JOB_ID",
+    "status": "pending"
+  }
+}
+```
+
+If the job does not exist, the service returns HTTP `404`.
+
+## Complete A Job
+
+This endpoint is for the future Figma plugin after it creates real Figma frames.
+
+```bash
+curl -X POST http://localhost:3005/figma/jobs/JOB_ID/complete \
+  -H "Content-Type: application/json" \
+  -d '{
+    "figmaFileKey": "real-file-key",
+    "figmaFileUrl": "https://www.figma.com/design/real-file-key/example",
+    "figmaFrameId": "real-frame-id",
+    "figmaFrameUrl": "https://www.figma.com/design/real-file-key/example?node-id=real-frame-id"
+  }'
+```
+
+Expected response:
+
+```json
+{
+  "success": true,
+  "job": {
+    "jobId": "JOB_ID",
+    "status": "completed",
+    "figmaFileKey": "real-file-key",
+    "figmaFileUrl": "https://www.figma.com/design/real-file-key/example",
+    "figmaFrameId": "real-frame-id",
+    "figmaFrameUrl": "https://www.figma.com/design/real-file-key/example?node-id=real-frame-id"
+  }
+}
+```
+
+## Fail A Job
+
+```bash
+curl -X POST http://localhost:3005/figma/jobs/JOB_ID/fail \
+  -H "Content-Type: application/json" \
+  -d '{
+    "reason": "Figma plugin could not create the required frame."
+  }'
+```
+
+Expected response:
+
+```json
+{
+  "success": true,
+  "job": {
+    "jobId": "JOB_ID",
+    "status": "failed",
+    "failureReason": "Figma plugin could not create the required frame."
+  }
 }
 ```
 
@@ -115,7 +223,49 @@ The n8n HTTP Request node should send a JSON body:
 }
 ```
 
-Use method `POST`, set `Content-Type` to `application/json`, and pass the response fields back into later Jira or Figma workflow steps as needed.
+Use method `POST` and set `Content-Type` to `application/json`. The response contains a real `jobId` with `status: "pending"`. A future Figma plugin should pull `/figma/jobs/pending`, create real Figma frames, then call `/figma/jobs/:jobId/complete`.
+
+## Manual Test Flow
+
+This project does not currently include an automated test setup. Use this local smoke test flow:
+
+```bash
+npm install
+npm run build
+npm run dev
+```
+
+In another terminal:
+
+```bash
+curl http://localhost:3005/health
+```
+
+Create a job, copy the returned `jobId`, then list pending jobs:
+
+```bash
+curl http://localhost:3005/figma/jobs/pending
+```
+
+Complete the job:
+
+```bash
+curl -X POST http://localhost:3005/figma/jobs/JOB_ID/complete \
+  -H "Content-Type: application/json" \
+  -d '{
+    "figmaFileKey": "real-file-key",
+    "figmaFileUrl": "https://www.figma.com/design/real-file-key/example",
+    "figmaFrameId": "real-frame-id"
+  }'
+```
+
+Or fail a job:
+
+```bash
+curl -X POST http://localhost:3005/figma/jobs/JOB_ID/fail \
+  -H "Content-Type: application/json" \
+  -d '{"reason": "Plugin failed to create frames."}'
+```
 
 ## Deployment
 
@@ -318,7 +468,7 @@ curl -X POST http://VPS_HOST:3005/figma/create-design-draft \
   }'
 ```
 
-Expected: a successful mock Figma response containing `figma_url`.
+Expected: a successful pending job response containing `jobId` and `status: "pending"`.
 
 ### n8n URL
 

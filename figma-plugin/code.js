@@ -642,11 +642,41 @@ function isDesignSystemJob(job) {
     const matchedSectionCount = dsSectionGroups.filter(function (group) {
         return group.some(function (variant) { return allText.indexOf(variant) >= 0; });
     }).length;
-    const result = matchedIndicators.length > 0 || matchedSectionCount >= 4;
+    const negativeIndicators = [
+        "not a design system",
+        "is not a design system",
+        "not design system",
+        "no design system",
+        "not for design system",
+        "screen draft",
+        "product screen",
+        "feature screen",
+        "app screen",
+        "mobile screen",
+        "web screen",
+        "ui screen",
+        "create a screen",
+        "create the screen",
+        "design a screen",
+        "build a screen",
+        "create a page",
+        "design a page",
+        "landing page",
+        "onboarding screen",
+        "onboarding flow",
+        "product page",
+        "feature page"
+    ];
+    const matchedNegatives = negativeIndicators.filter(function (ind) {
+        return titleAndObjective.indexOf(ind) >= 0;
+    });
+    const hasPositive = matchedIndicators.length > 0 || matchedSectionCount >= 4;
+    const result = hasPositive && matchedNegatives.length === 0;
     console.log("[isDesignSystemJob]", {
         briefTitle: job.briefTitle,
         objective: (job.objective || "").substring(0, 80),
         matchedIndicators: matchedIndicators,
+        matchedNegatives: matchedNegatives,
         matchedSectionCount: matchedSectionCount,
         mode: result ? "design-system" : "screen"
     });

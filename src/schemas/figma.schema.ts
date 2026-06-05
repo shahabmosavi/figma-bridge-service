@@ -3,6 +3,11 @@ import { z } from "zod";
 const requiredText = z.string().trim().min(1);
 const optionalText = z.string().trim().min(1).optional();
 
+const designPlanSchema = z.object({
+  layoutPattern: z.string().trim().min(1).optional(),
+  contentBlocks: z.array(z.record(z.unknown())).optional()
+}).passthrough();
+
 export const createDesignDraftSchema = z.object({
   issueKey: requiredText,
   briefTitle: requiredText,
@@ -13,7 +18,8 @@ export const createDesignDraftSchema = z.object({
   uxNotes: optionalText,
   designConstraints: optionalText,
   acceptanceCriteria: optionalText,
-  figmaInstruction: requiredText
+  figmaInstruction: requiredText,
+  designPlan: designPlanSchema.optional()
 });
 
 export type CreateDesignDraftInput = z.infer<typeof createDesignDraftSchema>;

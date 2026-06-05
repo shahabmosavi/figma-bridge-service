@@ -188,6 +188,7 @@
   <section class="config">
     <div class="panel-title">Config</div>
     <p><strong>Backend base URL:</strong> <code id="backendUrl"></code></p>
+    <p><strong>Design tokens:</strong> <span id="tokenStatus">fallback</span></p>
     <p><strong>Manifest:</strong> allow this exact domain in <code>networkAccess.allowedDomains</code>. See README debugging notes.</p>
     <p id="httpsWarning" class="warning"></p>
   </section>
@@ -213,23 +214,147 @@
     const statusElement = document.getElementById("status");
     const jobsElement = document.getElementById("jobs");
     const backendUrlElement = document.getElementById("backendUrl");
+    const tokenStatusElement = document.getElementById("tokenStatus");
     const httpsWarningElement = document.getElementById("httpsWarning");
     const debugLogElement = document.getElementById("debugLog");
     const inFlightJobs = new Map();
     const pendingFetches = new Map();
-    const designSystemKeywords = [
+    const hardScreenIndicators = [
+      "screen draft",
+      "screen scaffold",
+      "product screen",
+      "dashboard",
+      "dashboard overview",
+      "conversation dashboard",
+      "onboarding screen",
+      "settings screen",
+      "pricing screen"
+    ];
+    const hardDesignSystemTitleIndicators = [
+      "create design system",
+      "build design system",
+      "define design system",
+      "design system foundation",
+      "design system scaffold",
+      "initial figma design system rules",
+      "design system rules"
+    ];
+    const designSystemExplicitKeywords = [
       "design system",
       "design foundation",
       "style guide",
+      "visual language",
+      "brand system"
+    ];
+    const designSystemSectionKeywords = [
+      "color system",
       "color rules",
+      "typography scale",
       "typography rules",
+      "spacing scale",
       "spacing rules",
+      "component foundation",
       "component rules",
+      "state rules",
       "figma naming",
+      "naming convention",
       "ai usage rules"
     ];
+    const screenDraftNegativeKeywords = [
+      "screen design",
+      "screen layout",
+      "screen scaffold",
+      "product screen",
+      "app screen",
+      "ui screen",
+      "page layout",
+      "user flow",
+      "onboarding screen",
+      "login screen",
+      "dashboard screen",
+      "settings screen",
+      "profile screen",
+      "home screen",
+      "feed screen",
+      "detail screen",
+      "list screen",
+      "modal screen",
+      "form screen"
+    ];
+    const fallbackDesignTokens = {
+      colors: {
+        brand: { primary: "#111827" },
+        neutral: {
+          "900": "#111827",
+          "700": "#374151",
+          "500": "#6B7280",
+          "200": "#E5E7EB",
+          "50": "#F9FAFB"
+        },
+        accent: { ai: "#635BFF" },
+        semantic: {
+          success: "#16A34A",
+          warning: "#F59E0B",
+          error: "#DC2626",
+          info: "#2563EB"
+        }
+      },
+      typography: {
+        display: { fontSize: "40px", fontWeight: "bold" },
+        h1: { fontSize: "32px", fontWeight: "bold" },
+        h2: { fontSize: "24px", fontWeight: "semibold" },
+        body: { fontSize: "16px", fontWeight: "regular" },
+        label: { fontSize: "14px", fontWeight: "medium" },
+        caption: { fontSize: "12px", fontWeight: "regular" }
+      },
+      spacing: [4, 8, 12, 16, 24, 32, 48, 64],
+      radius: { sm: 6, md: 12, lg: 20 },
+      shadows: {
+        none: "none",
+        cardSubtle: {
+          type: "dropShadow",
+          x: 0,
+          y: 8,
+          blur: 20,
+          spread: -8,
+          color: "rgba(17, 24, 39, 0.12)"
+        },
+        overlaySubtle: {
+          type: "dropShadow",
+          x: 0,
+          y: 16,
+          blur: 32,
+          spread: -10,
+          color: "rgba(17, 24, 39, 0.18)"
+        }
+      },
+      components: {
+        button: { primary: { name: "button.primary" }, secondary: { name: "button.secondary" } },
+        input: { text: { name: "input.text" } },
+        card: { dashboard: { name: "card.dashboard" }, emptyState: { name: "card.emptyState" } },
+        status: { message: { name: "status.message" } }
+      },
+      states: ["default", "hover", "focus", "disabled", "loading", "error", "success", "empty"],
+      figmaNaming: [
+        "Color/Brand/Primary",
+        "Color/Neutral/900",
+        "Text/Heading/H1",
+        "Component/Button/Primary",
+        "Component/Input/Text/Default",
+        "Effect/Shadow/Card"
+      ],
+      aiUsageRules: [
+        "Use this token registry as the design source of truth.",
+        "Prefer existing tokens before creating new values.",
+        "Do not invent a new visual identity.",
+        "Keep screens clear for non-technical Instagram business owners.",
+        "Use simple SaaS layout patterns unless the Jira issue explicitly requires otherwise."
+      ]
+    };
+    let cachedDesignTokens = fallbackDesignTokens;
 
     backendUrlElement.textContent = BACKEND_BASE_URL;
+    tokenStatusElement.textContent = "fallback";
     if (BACKEND_BASE_URL.indexOf("https://") !== 0) {
       httpsWarningElement.textContent = "Warning: BACKEND_BASE_URL does not start with https://. Use the ngrok HTTPS URL for Figma plugin development.";
     }
@@ -245,9 +370,11 @@
     window.addEventListener("message", handlePluginMessage);
 
     logDebug("plugin loaded");
+    logDebug("PLUGIN VERSION: strict-detection-v3");
     logDebug("BACKEND_BASE_URL value", BACKEND_BASE_URL);
     logDebug("health URL", BACKEND_BASE_URL + "/health");
     logDebug("pending jobs URL", BACKEND_BASE_URL + "/figma/jobs/pending");
+    loadTokensOnPluginStart();
 
     async function testHealth() {
       const healthUrl = BACKEND_BASE_URL + "/health";
@@ -297,9 +424,16 @@
       }
 
       for (const job of jobs) {
-        const designSystemMode = isDesignSystemJob(job);
-        const modeLabel = designSystemMode ? "Design System" : "Screen Draft";
-        const modeClass = designSystemMode ? "mode-badge" : "mode-badge screen";
+        const jobModeResult = getJobMode(job);
+        const modeLabel = jobModeResult.mode;
+        const modeClass = modeLabel === "Design System" ? "mode-badge" : "mode-badge screen";
+        logDebug("[card] issueKey: " + (job.issueKey || "none"));
+        logDebug("[card] title/briefTitle: " + jobModeResult.titleText);
+        logDebug("[card] hardScreenMatches: " + JSON.stringify(jobModeResult.hardScreenMatches));
+        logDebug("[card] hardDSTitleMatches: " + JSON.stringify(jobModeResult.hardDsTitleMatches));
+        logDebug("[card] dsExplicitMatches: " + JSON.stringify(jobModeResult.explicitMatches));
+        logDebug("[card] dsSectionCount: " + jobModeResult.sectionCount);
+        logDebug("[card] final mode: " + modeLabel);
         const card = document.createElement("section");
         card.className = "card";
         card.innerHTML = `
@@ -324,7 +458,7 @@
       }
     }
 
-    function createDraft(job, button) {
+    async function createDraft(job, button) {
       if (!job.jobId) {
         setStatus("Cannot create draft: this job does not include a jobId.", "error");
         return;
@@ -334,17 +468,19 @@
       button.disabled = true;
       button.textContent = "Creating...";
       setStatus("Creating Figma draft for " + (job.issueKey || job.jobId) + "...");
-      logDebug("Create Figma Draft clicked", { jobId: job.jobId, issueKey: job.issueKey });
-      logDebug("draft mode selected before frame creation", {
-        jobId: job.jobId,
-        mode: isDesignSystemJob(job) ? "Design System Foundation" : "Screen Draft"
-      });
+      const clickedMode = getJobMode(job);
+      logDebug("[click] issueKey: " + (job.issueKey || "none"));
+      logDebug("[click] mode from getJobMode: " + clickedMode.mode);
+
+      const tokens = await loadLatestTokensForDraft();
+      logDebug("tokens used for draft creation", summarizeTokens(tokens));
 
       parent.postMessage(
         {
           pluginMessage: {
             type: "create-draft",
-            job: job
+            job: job,
+            tokens: tokens
           }
         },
         "*"
@@ -446,6 +582,51 @@
           }
         }, "*");
       });
+    }
+
+    async function loadTokensOnPluginStart() {
+      try {
+        cachedDesignTokens = await fetchDesignTokens();
+        setTokenStatus("loaded");
+      } catch (error) {
+        cachedDesignTokens = fallbackDesignTokens;
+        setTokenStatus("fallback");
+        logFetchError("tokens fetch failed, using fallback", error);
+      }
+    }
+
+    async function loadLatestTokensForDraft() {
+      try {
+        cachedDesignTokens = await fetchDesignTokens();
+        setTokenStatus("loaded");
+        return cachedDesignTokens;
+      } catch (error) {
+        cachedDesignTokens = fallbackDesignTokens;
+        setTokenStatus("fallback");
+        logFetchError("tokens fetch failed, using fallback", error);
+        return fallbackDesignTokens;
+      }
+    }
+
+    async function fetchDesignTokens() {
+      const tokensUrl = BACKEND_BASE_URL + "/design-system/tokens";
+      logDebug("tokens fetch started", { url: tokensUrl });
+      const tokens = await fetchJson(tokensUrl, "design tokens");
+      logDebug("tokens fetch success", summarizeTokens(tokens));
+      return tokens;
+    }
+
+    function setTokenStatus(status) {
+      tokenStatusElement.textContent = status;
+    }
+
+    function summarizeTokens(tokens) {
+      return {
+        colorGroups: tokens && tokens.colors ? Object.keys(tokens.colors) : [],
+        typography: tokens && tokens.typography ? Object.keys(tokens.typography) : [],
+        spacingCount: tokens && Array.isArray(tokens.spacing) ? tokens.spacing.length : 0,
+        radius: tokens ? tokens.radius : null
+      };
     }
 
     async function fetchJson(url, label) {
@@ -558,22 +739,54 @@
       }
     }
 
-    function isDesignSystemJob(job) {
-      const searchableText = [
+    function getJobMode(job) {
+      const titleText = String(job.briefTitle || job.title || "").toLowerCase();
+      const objectiveText = String(job.objective || "").toLowerCase();
+      const combinedText = [
+        job.issueKey,
         job.briefTitle,
+        job.title,
         job.objective,
         job.figmaInstruction,
         job.requiredSections,
-        job.acceptanceCriteria
+        job.acceptanceCriteria,
+        job.targetUser
       ].join(" ").toLowerCase();
 
-      for (const keyword of designSystemKeywords) {
-        if (searchableText.indexOf(keyword) >= 0) {
-          return true;
-        }
+      const hardScreenMatches = hardScreenIndicators.filter(function (k) { return titleText.indexOf(k) >= 0; });
+      const hardDsTitleMatches = hardDesignSystemTitleIndicators.filter(function (k) { return titleText.indexOf(k) >= 0; });
+      const explicitMatches = designSystemExplicitKeywords.filter(function (k) { return combinedText.indexOf(k) >= 0; });
+      const sectionMatches = designSystemSectionKeywords.filter(function (k) { return combinedText.indexOf(k) >= 0; });
+      const screenNegMatches = screenDraftNegativeKeywords.filter(function (k) { return combinedText.indexOf(k) >= 0; });
+
+      var mode;
+      if (hardScreenMatches.length > 0 && hardDsTitleMatches.length === 0) {
+        mode = "Screen Draft";
+      } else if (
+        objectiveText.indexOf("product screen draft") >= 0 ||
+        objectiveText.indexOf("dashboard screen") >= 0 ||
+        objectiveText.indexOf("dashboard overview") >= 0
+      ) {
+        mode = "Screen Draft";
+      } else {
+        const hasExplicit = explicitMatches.length > 0;
+        const hasManySections = sectionMatches.length >= 4;
+        const hasScreenSignal = screenNegMatches.length > 0;
+        mode = (hasExplicit || hasManySections) && !hasScreenSignal ? "Design System" : "Screen Draft";
       }
 
-      return false;
+      return {
+        mode: mode,
+        titleText: titleText,
+        hardScreenMatches: hardScreenMatches,
+        hardDsTitleMatches: hardDsTitleMatches,
+        explicitMatches: explicitMatches,
+        sectionCount: sectionMatches.length
+      };
+    }
+
+    function isDesignSystemJob(job) {
+      return getJobMode(job).mode === "Design System";
     }
 
     function formatDate(value) {

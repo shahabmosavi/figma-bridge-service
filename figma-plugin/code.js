@@ -69,10 +69,93 @@ const fallbackTokens = {
         "Use simple SaaS layout patterns unless the Jira issue explicitly requires otherwise."
     ]
 };
+// Strong, unambiguous DS intent — checked against combinedText
+// Excluded (too ambiguous): design tokens, token registry, shared design tokens,
+// styling tokens, token-based styling, visual/design source of truth, screen draft renderer
+const designSystemExplicitKeywords = [
+    "design system",
+    "design foundation",
+    "style guide",
+    "visual language",
+    "brand system"
+];
+// Section-level DS signals — individually weak, strong only in aggregate (≥4)
+const designSystemSectionKeywords = [
+    "color system",
+    "color rules",
+    "typography scale",
+    "typography rules",
+    "spacing scale",
+    "spacing rules",
+    "component foundation",
+    "component rules",
+    "state rules",
+    "figma naming",
+    "naming convention",
+    "ai usage rules"
+];
+// Negative overrides — any match in full job text forces Screen Draft
+const screenDraftNegativeKeywords = [
+    "screen design",
+    "screen layout",
+    "screen scaffold",
+    "product screen",
+    "app screen",
+    "ui screen",
+    "page layout",
+    "user flow",
+    "onboarding screen",
+    "login screen",
+    "dashboard screen",
+    "settings screen",
+    "profile screen",
+    "home screen",
+    "feed screen",
+    "detail screen",
+    "list screen",
+    "modal screen",
+    "form screen"
+];
+const dashboardKeywords = [
+    "dashboard",
+    "analytics",
+    "metrics",
+    "kpi",
+    "overview screen",
+    "reporting screen",
+    "stats screen",
+    "insights screen",
+    "admin panel",
+    "control panel"
+];
+const conversationDashboardKeywords = [
+    "conversation",
+    "conversations",
+    "dm",
+    "direct message",
+    "ai reply",
+    "confidence",
+    "handoff",
+    "queue",
+    "sync status"
+];
+const onboardingKeywords = [
+    "onboarding",
+    "getting started",
+    "welcome screen",
+    "setup flow",
+    "activation flow",
+    "first-time",
+    "first time user",
+    "sign-up flow",
+    "registration flow",
+    "setup wizard"
+];
 const designSystemPlaceholder = "Define this section based on the generated brief and product design foundation.";
 const regularFont = { family: "Inter", style: "Regular" };
 const boldFont = { family: "Inter", style: "Bold" };
 figma.showUI(__html__, { width: 420, height: 640, themeColors: true });
+console.log("PLUGIN VERSION: strict-detection-v3");
 figma.ui.onmessage = async (message) => {
     if (message.type === "fetch-request") {
         await handleFetchRequest(message);
@@ -85,19 +168,44 @@ figma.ui.onmessage = async (message) => {
         await figma.loadFontAsync(regularFont);
         await figma.loadFontAsync(boldFont);
         const tokens = normalizeTokens(message.tokens);
-        const frame = isDesignSystemJob(message.job)
-            ? createDesignSystemDraft(message.job, tokens)
-            : createDraftFrame(message.job, tokens);
+        const job = normalizeJob(message.job);
+        const designPlan = job.designPlan;
+        console.log(`[onmessage] jobId: ${job.jobId}`);
+        console.log(`[onmessage] issueKey: ${job.issueKey || "none"}`);
+        console.log(`[onmessage] using designPlan: ${!!designPlan}`);
+        if (designPlan) {
+            console.log(`[onmessage] layoutPattern: ${designPlan.layoutPattern || "none"}`);
+            console.log(`[onmessage] contentBlocks count: ${Array.isArray(designPlan.contentBlocks) ? designPlan.contentBlocks.length : 0}`);
+        }
+        let frame;
+        if (isDesignSystemJob(job)) {
+            frame = createDesignSystemDraft(job, tokens);
+        }
+        else if (designPlan) {
+            frame = renderDesignPlan(job, designPlan, tokens);
+        }
+        else {
+            console.log(`[onmessage] fallback reason: no designPlan, using legacy renderer`);
+            if (isDashboardJob(job)) {
+                frame = createDashboardDraft(job, tokens);
+            }
+            else if (isOnboardingJob(job)) {
+                frame = createOnboardingDraft(job, tokens);
+            }
+            else {
+                frame = createDraftFrame(job, tokens);
+            }
+        }
         figma.currentPage.selection = [frame];
         figma.viewport.scrollAndZoomIntoView([frame]);
-        const figmaFileKey = figma.fileKey || null;
+        const figmaFileKey = figma.fileKey ? figma.fileKey : "";
         const encodedFrameId = encodeURIComponent(frame.id);
-        const figmaFileUrl = figmaFileKey ? `https://www.figma.com/file/${figmaFileKey}` : null;
-        const figmaFrameUrl = figmaFileKey ? `https://www.figma.com/file/${figmaFileKey}?node-id=${encodedFrameId}` : null;
+        const figmaFileUrl = figmaFileKey ? `https://www.figma.com/file/${figmaFileKey}` : "";
+        const figmaFrameUrl = figmaFileKey ? `${figmaFileUrl}?node-id=${encodedFrameId}` : "";
         figma.ui.postMessage({
             type: "frame-created",
             success: true,
-            jobId: message.job.jobId,
+            jobId: job.jobId,
             figmaFrameId: frame.id,
             figmaFileKey,
             figmaFileUrl,
@@ -148,6 +256,594 @@ async function handleFetchRequest(message) {
         });
     }
 }
+// ─── Generic Design Plan Renderer ────────────────────────────────────────────
+function renderDesignPlan(job, designPlan, tokens) {
+    const issueKey = textOrFallback(job.issueKey, "No issue key");
+    const planTitle = textOrFallback(designPlan.title || designPlan.briefTitle || job.briefTitle, "Untitled design job");
+    const objective = textOrFallback(designPlan.objective || job.objective, "No objective provided.");
+    const targetUser = textOrFallback(designPlan.targetUser || job.targetUser, "Not specified");
+    const layoutPattern = designPlan.layoutPattern || "generic_screen_scaffold";
+    const contentBlocks = Array.isArray(designPlan.contentBlocks) ? designPlan.contentBlocks : [];
+    console.log(`[renderDesignPlan] jobId: ${job.jobId}`);
+    console.log(`[renderDesignPlan] issueKey: ${issueKey}`);
+    console.log(`[renderDesignPlan] layoutPattern: ${layoutPattern}`);
+    console.log(`[renderDesignPlan] contentBlocks count: ${contentBlocks.length}`);
+    const frame = figma.createFrame();
+    frame.name = `AI Draft - ${issueKey} - ${planTitle}`;
+    frame.fills = [solid(tokens.colors.neutral["50"])];
+    frame.layoutMode = "VERTICAL";
+    frame.primaryAxisSizingMode = "AUTO";
+    frame.counterAxisSizingMode = "FIXED";
+    frame.resize(1440, 100);
+    setPadding(frame, spacing(tokens, 7));
+    frame.itemSpacing = spacing(tokens, 5);
+    frame.appendChild(createDesignPlanHeader(issueKey, planTitle, objective, targetUser, layoutPattern, tokens));
+    const blocksToRender = contentBlocks.length > 0
+        ? contentBlocks
+        : getDefaultBlocksForPattern(layoutPattern);
+    if (contentBlocks.length === 0) {
+        console.log(`[renderDesignPlan] no contentBlocks — generating defaults for layoutPattern: ${layoutPattern}`);
+    }
+    for (const block of blocksToRender) {
+        frame.appendChild(renderContentBlock(block, tokens));
+    }
+    frame.appendChild(createNoteCard("AI-generated draft scaffold from design plan. A designer should review and refine.", tokens));
+    const position = findNextFramePosition();
+    figma.currentPage.appendChild(frame);
+    frame.x = position.x;
+    frame.y = position.y;
+    return frame;
+}
+function getDefaultBlocksForPattern(layoutPattern) {
+    switch (layoutPattern) {
+        case "dashboard_overview":
+            return [
+                { type: "pageHeader", title: "Dashboard", description: "Overview of key metrics and activity." },
+                { type: "metricCards", title: "Key Metrics", items: [] },
+                { type: "tableSection", title: "Recent Activity" }
+            ];
+        case "settings_page":
+            return [
+                { type: "pageHeader", title: "Settings", description: "Manage your account and preferences." },
+                { type: "formSection", title: "General Settings", fields: ["Display Name", "Email", "Language"], cta: "Save Changes" },
+                { type: "listSection", title: "Danger Zone", items: ["Reset preferences", "Delete account"] }
+            ];
+        case "list_table_page":
+            return [
+                { type: "pageHeader", title: "List", description: "Browse and manage items." },
+                { type: "tableSection", title: "Items", columns: ["Name", "Status", "Date", "Actions"] }
+            ];
+        case "form_page":
+            return [
+                { type: "pageHeader", title: "Form", description: "Fill in the details below." },
+                { type: "formSection", title: "Details", fields: ["Field 1", "Field 2", "Field 3"], cta: "Submit" }
+            ];
+        case "detail_page":
+            return [
+                { type: "pageHeader", title: "Details" },
+                { type: "cardGrid", title: "Overview", items: [
+                        { label: "Status", description: "Active" },
+                        { label: "Created", description: "Today" },
+                        { label: "Owner", description: "User" }
+                    ] },
+                { type: "listSection", title: "Related Items", items: ["Item 1", "Item 2", "Item 3"] }
+            ];
+        case "landing_page":
+            return [
+                { type: "heroSection", title: "Welcome", description: "A short value proposition.", cta: "Get Started" },
+                { type: "cardGrid", title: "Features", items: [
+                        { label: "Feature 1", description: "What it does." },
+                        { label: "Feature 2", description: "What it does." },
+                        { label: "Feature 3", description: "What it does." }
+                    ] },
+                { type: "formSection", title: "Sign Up", fields: ["Name", "Email"], cta: "Start Free Trial" }
+            ];
+        case "generic_screen_scaffold":
+        default:
+            return [
+                { type: "pageHeader", title: "Screen", description: "Scaffold for a generic product screen." },
+                { type: "genericContentBlock", title: "Primary Content", description: "Add your main content here." },
+                { type: "emptyState", title: "No items yet", description: "Content will appear here." }
+            ];
+    }
+}
+function renderContentBlock(block, tokens) {
+    const blockType = typeof block.type === "string" ? block.type : "genericContentBlock";
+    switch (blockType) {
+        case "pageHeader": return renderPageHeaderBlock(block, tokens);
+        case "heroSection": return renderHeroSectionBlock(block, tokens);
+        case "metricCards": return renderMetricCardsBlock(block, tokens);
+        case "cardGrid": return renderCardGridBlock(block, tokens);
+        case "tableSection": return renderTableSectionBlock(block, tokens);
+        case "formSection": return renderFormSectionBlock(block, tokens);
+        case "listSection": return renderListSectionBlock(block, tokens);
+        case "emptyState": return renderEmptyStateBlock(block, tokens);
+        case "loadingState": return renderLoadingStateBlock(block, tokens);
+        case "errorState": return renderErrorStateBlock(block, tokens);
+        case "successState": return renderSuccessStateBlock(block, tokens);
+        default: return renderGenericContentBlock(block, tokens);
+    }
+}
+function renderPageHeaderBlock(block, tokens) {
+    const title = blockStr(block, "title");
+    const description = blockStr(block, "description") || blockStr(block, "subtitle");
+    const cta = blockStr(block, "cta") || blockStr(block, "action");
+    const container = createBlockContainer("Page Header", tokens);
+    const titleText = createTokenText(textOrFallback(title, "Page Title"), tokens, "h1", "bold", tokens.colors.neutral["900"]);
+    titleText.layoutAlign = "STRETCH";
+    container.appendChild(titleText);
+    if (description) {
+        const descText = createTokenText(truncateText(description, 160), tokens, "body", "regular", tokens.colors.neutral["500"]);
+        descText.layoutAlign = "STRETCH";
+        container.appendChild(descText);
+    }
+    if (cta) {
+        container.appendChild(createPrimaryButton(cta, tokens));
+    }
+    return container;
+}
+function renderHeroSectionBlock(block, tokens) {
+    const title = blockStr(block, "title") || blockStr(block, "heading");
+    const description = blockStr(block, "description") || blockStr(block, "subtitle");
+    const cta = blockStr(block, "cta") || blockStr(block, "action");
+    const container = createBlockContainer("Hero Section", tokens);
+    container.fills = [solid(tokens.colors.neutral["900"])];
+    container.cornerRadius = tokens.radius.lg;
+    container.paddingTop = spacing(tokens, 7);
+    container.paddingBottom = spacing(tokens, 7);
+    if (title) {
+        const titleText = createTokenText(truncateText(title, 80), tokens, "display", "bold", "#FFFFFF");
+        titleText.layoutAlign = "STRETCH";
+        container.appendChild(titleText);
+    }
+    if (description) {
+        const descText = createTokenText(truncateText(description, 160), tokens, "body", "regular", tokens.colors.neutral["200"]);
+        descText.layoutAlign = "STRETCH";
+        container.appendChild(descText);
+    }
+    if (cta) {
+        const ctaBtn = createPrimaryButton(cta, tokens);
+        ctaBtn.fills = [solid(tokens.colors.accent.ai)];
+        container.appendChild(ctaBtn);
+    }
+    return container;
+}
+function renderMetricCardsBlock(block, tokens) {
+    const title = blockStr(block, "title") || "Metrics";
+    const items = blockArr(block, "items");
+    const defaultItems = [
+        { label: "Total", value: "—", description: "" },
+        { label: "Active", value: "—", description: "" },
+        { label: "Growth", value: "—", description: "" }
+    ];
+    const cardItems = items.length > 0 ? items.slice(0, 4) : defaultItems;
+    const container = createBlockContainer(title, tokens);
+    const heading = createTokenText(title, tokens, "h2", "bold", tokens.colors.neutral["900"]);
+    heading.layoutAlign = "STRETCH";
+    container.appendChild(heading);
+    const cardRow = createRow("Metric cards", spacing(tokens, 3));
+    cardRow.layoutAlign = "STRETCH";
+    for (const item of cardItems) {
+        const label = typeof item === "object" && item !== null ? String(item.label || "Metric") : "Metric";
+        const value = typeof item === "object" && item !== null ? String(item.value || "—") : "—";
+        const desc = typeof item === "object" && item !== null ? String(item.description || "") : "";
+        cardRow.appendChild(createGenericMetricCard(label, value, desc, tokens));
+    }
+    container.appendChild(cardRow);
+    return container;
+}
+function renderCardGridBlock(block, tokens) {
+    const title = blockStr(block, "title") || "Cards";
+    const items = blockArr(block, "items");
+    const gridItems = items.length > 0 ? items.slice(0, 6) : [
+        { label: "Card 1", description: "Placeholder card content" },
+        { label: "Card 2", description: "Placeholder card content" },
+        { label: "Card 3", description: "Placeholder card content" }
+    ];
+    const container = createBlockContainer(title, tokens);
+    const heading = createTokenText(title, tokens, "h2", "bold", tokens.colors.neutral["900"]);
+    heading.layoutAlign = "STRETCH";
+    container.appendChild(heading);
+    const rowSize = 3;
+    for (let i = 0; i < gridItems.length; i += rowSize) {
+        const rowItems = gridItems.slice(i, i + rowSize);
+        const row = createRow(`Cards row ${Math.floor(i / rowSize) + 1}`, spacing(tokens, 3));
+        row.layoutAlign = "STRETCH";
+        for (const item of rowItems) {
+            const label = typeof item === "string" ? item : String(item.label || "Card");
+            const desc = typeof item === "object" && item !== null ? String(item.description || "") : "";
+            const card = figma.createFrame();
+            card.name = label;
+            card.layoutMode = "VERTICAL";
+            card.primaryAxisSizingMode = "AUTO";
+            card.counterAxisSizingMode = "FIXED";
+            card.resize(400, 100);
+            card.paddingTop = spacing(tokens, 3);
+            card.paddingBottom = spacing(tokens, 3);
+            card.paddingLeft = spacing(tokens, 3);
+            card.paddingRight = spacing(tokens, 3);
+            card.itemSpacing = spacing(tokens, 1);
+            card.cornerRadius = tokens.radius.md;
+            card.fills = [solid("#FFFFFF")];
+            card.strokes = [solid(tokens.colors.neutral["200"])];
+            card.strokeWeight = 1;
+            applyShadow(card, tokens, "cardSubtle");
+            card.appendChild(createTokenText(truncateText(label, 40), tokens, "label", "bold", tokens.colors.neutral["900"]));
+            if (desc) {
+                const descText = createTokenText(truncateText(desc, 100), tokens, "caption", "regular", tokens.colors.neutral["700"]);
+                descText.layoutAlign = "STRETCH";
+                card.appendChild(descText);
+            }
+            row.appendChild(card);
+        }
+        container.appendChild(row);
+    }
+    return container;
+}
+function renderTableSectionBlock(block, tokens) {
+    const title = blockStr(block, "title") || "Table";
+    const columns = blockArr(block, "columns");
+    const colNames = columns.length > 0
+        ? columns.map(c => typeof c === "string" ? c : String(c.label || c.name || "—"))
+        : ["Name", "Status", "Date", "Value"];
+    const container = createBlockContainer(title, tokens);
+    const heading = createTokenText(title, tokens, "h2", "bold", tokens.colors.neutral["900"]);
+    heading.layoutAlign = "STRETCH";
+    container.appendChild(heading);
+    const headerRow = createRow("Table header", spacing(tokens, 3));
+    headerRow.layoutAlign = "STRETCH";
+    for (const col of colNames) {
+        const cell = createTokenText(col, tokens, "caption", "bold", tokens.colors.neutral["500"]);
+        cell.layoutGrow = 1;
+        headerRow.appendChild(cell);
+    }
+    container.appendChild(headerRow);
+    const divider = figma.createFrame();
+    divider.name = "Table header divider";
+    divider.primaryAxisSizingMode = "FIXED";
+    divider.counterAxisSizingMode = "FIXED";
+    divider.layoutAlign = "STRETCH";
+    divider.resize(100, 1);
+    divider.fills = [solid(tokens.colors.neutral["200"])];
+    container.appendChild(divider);
+    const rowCount = Math.min(5, Math.max(3, blockArr(block, "rows").length || 3));
+    for (let r = 0; r < rowCount; r++) {
+        const tableRow = createRow(`Row ${r + 1}`, spacing(tokens, 3));
+        tableRow.layoutAlign = "STRETCH";
+        tableRow.fills = r % 2 === 0 ? [] : [solid(tokens.colors.neutral["50"])];
+        for (let ci = 0; ci < colNames.length; ci++) {
+            const cell = createTokenText("—", tokens, "body", "regular", tokens.colors.neutral["700"]);
+            cell.layoutGrow = 1;
+            tableRow.appendChild(cell);
+        }
+        container.appendChild(tableRow);
+    }
+    return container;
+}
+function renderFormSectionBlock(block, tokens) {
+    const title = blockStr(block, "title") || "Form";
+    const fields = blockArr(block, "fields");
+    const fieldNames = fields.length > 0
+        ? fields.slice(0, 6).map(f => typeof f === "string" ? f : String(f.label || f.name || "Field"))
+        : ["Field 1", "Field 2", "Field 3"];
+    const cta = blockStr(block, "cta") || blockStr(block, "submitLabel") || "Submit";
+    const container = createBlockContainer(title, tokens);
+    const heading = createTokenText(title, tokens, "h2", "bold", tokens.colors.neutral["900"]);
+    heading.layoutAlign = "STRETCH";
+    container.appendChild(heading);
+    const formFields = figma.createFrame();
+    formFields.name = "Form fields";
+    formFields.layoutMode = "VERTICAL";
+    formFields.primaryAxisSizingMode = "AUTO";
+    formFields.counterAxisSizingMode = "FIXED";
+    formFields.layoutAlign = "STRETCH";
+    formFields.fills = [];
+    formFields.itemSpacing = spacing(tokens, 3);
+    for (const fieldName of fieldNames) {
+        const wrapper = figma.createFrame();
+        wrapper.name = fieldName;
+        wrapper.layoutMode = "VERTICAL";
+        wrapper.primaryAxisSizingMode = "AUTO";
+        wrapper.counterAxisSizingMode = "FIXED";
+        wrapper.layoutAlign = "STRETCH";
+        wrapper.fills = [];
+        wrapper.itemSpacing = spacing(tokens, 1);
+        wrapper.appendChild(createTokenText(fieldName, tokens, "label", "bold", tokens.colors.neutral["700"]));
+        const input = figma.createFrame();
+        input.name = `${fieldName} input`;
+        input.layoutMode = "HORIZONTAL";
+        input.primaryAxisSizingMode = "FIXED";
+        input.counterAxisSizingMode = "FIXED";
+        input.layoutAlign = "STRETCH";
+        input.resize(800, 40);
+        input.paddingTop = spacing(tokens, 2);
+        input.paddingBottom = spacing(tokens, 2);
+        input.paddingLeft = spacing(tokens, 3);
+        input.paddingRight = spacing(tokens, 3);
+        input.counterAxisAlignItems = "CENTER";
+        input.cornerRadius = tokens.radius.sm;
+        input.fills = [solid("#FFFFFF")];
+        input.strokes = [solid(tokens.colors.neutral["200"])];
+        input.strokeWeight = 1;
+        input.appendChild(createTokenText(`Enter ${fieldName.toLowerCase()}...`, tokens, "body", "regular", tokens.colors.neutral["500"]));
+        wrapper.appendChild(input);
+        formFields.appendChild(wrapper);
+    }
+    container.appendChild(formFields);
+    container.appendChild(createPrimaryButton(cta, tokens));
+    return container;
+}
+function renderListSectionBlock(block, tokens) {
+    const title = blockStr(block, "title") || "List";
+    const items = blockArr(block, "items");
+    const listItems = items.length > 0 ? items.slice(0, 8) : ["Placeholder item 1", "Placeholder item 2", "Placeholder item 3"];
+    const container = createBlockContainer(title, tokens);
+    const heading = createTokenText(title, tokens, "h2", "bold", tokens.colors.neutral["900"]);
+    heading.layoutAlign = "STRETCH";
+    container.appendChild(heading);
+    for (const item of listItems) {
+        const label = typeof item === "string" ? item : String(item.label || item.name || "—");
+        const desc = typeof item === "object" && item !== null ? String(item.description || "") : "";
+        const listRow = createRow("List item", spacing(tokens, 2));
+        listRow.layoutAlign = "STRETCH";
+        listRow.counterAxisAlignItems = "CENTER";
+        const dot = figma.createEllipse();
+        dot.resize(8, 8);
+        dot.fills = [solid(tokens.colors.neutral["500"])];
+        listRow.appendChild(dot);
+        if (desc) {
+            const textCol = figma.createFrame();
+            textCol.name = "item text";
+            textCol.layoutMode = "VERTICAL";
+            textCol.primaryAxisSizingMode = "AUTO";
+            textCol.counterAxisSizingMode = "FIXED";
+            textCol.fills = [];
+            textCol.itemSpacing = 2;
+            textCol.layoutGrow = 1;
+            textCol.appendChild(createTokenText(truncateText(label, 100), tokens, "body", "regular", tokens.colors.neutral["900"]));
+            textCol.appendChild(createTokenText(truncateText(desc, 120), tokens, "caption", "regular", tokens.colors.neutral["500"]));
+            listRow.appendChild(textCol);
+        }
+        else {
+            const labelText = createTokenText(truncateText(label, 120), tokens, "body", "regular", tokens.colors.neutral["900"]);
+            labelText.layoutGrow = 1;
+            listRow.appendChild(labelText);
+        }
+        container.appendChild(listRow);
+    }
+    return container;
+}
+function renderEmptyStateBlock(block, tokens) {
+    const title = blockStr(block, "title") || "Nothing here yet";
+    const description = blockStr(block, "description") || "No items to display.";
+    const action = blockStr(block, "action") || blockStr(block, "cta");
+    const container = figma.createFrame();
+    container.name = "Empty State";
+    container.layoutMode = "VERTICAL";
+    container.primaryAxisSizingMode = "AUTO";
+    container.counterAxisSizingMode = "FIXED";
+    container.layoutAlign = "STRETCH";
+    setPadding(container, spacing(tokens, 6));
+    container.itemSpacing = spacing(tokens, 3);
+    container.primaryAxisAlignItems = "CENTER";
+    container.counterAxisAlignItems = "CENTER";
+    container.cornerRadius = tokens.radius.lg;
+    container.fills = [solid(tokens.colors.neutral["50"])];
+    container.strokes = [solid(tokens.colors.neutral["200"])];
+    container.strokeWeight = 1;
+    const iconCircle = figma.createFrame();
+    iconCircle.name = "Icon placeholder";
+    iconCircle.resize(48, 48);
+    iconCircle.cornerRadius = 999;
+    iconCircle.fills = [solid(tokens.colors.neutral["200"])];
+    container.appendChild(iconCircle);
+    container.appendChild(createTokenText(title, tokens, "h2", "bold", tokens.colors.neutral["700"]));
+    container.appendChild(createTokenText(description, tokens, "body", "regular", tokens.colors.neutral["500"]));
+    if (action) {
+        container.appendChild(createPrimaryButton(action, tokens));
+    }
+    return container;
+}
+function renderLoadingStateBlock(block, tokens) {
+    const title = blockStr(block, "title") || "Loading…";
+    const container = figma.createFrame();
+    container.name = "Loading State";
+    container.layoutMode = "VERTICAL";
+    container.primaryAxisSizingMode = "AUTO";
+    container.counterAxisSizingMode = "FIXED";
+    container.layoutAlign = "STRETCH";
+    setPadding(container, spacing(tokens, 4));
+    container.itemSpacing = spacing(tokens, 2);
+    container.cornerRadius = tokens.radius.md;
+    container.fills = [solid("#FFFFFF")];
+    container.strokes = [solid(tokens.colors.neutral["200"])];
+    container.strokeWeight = 1;
+    container.appendChild(createTokenText(title, tokens, "label", "bold", tokens.colors.neutral["500"]));
+    for (const w of [1100, 880, 990]) {
+        const bar = figma.createFrame();
+        bar.name = "skeleton bar";
+        bar.resize(w, 12);
+        bar.cornerRadius = 999;
+        bar.fills = [solid(tokens.colors.neutral["200"])];
+        container.appendChild(bar);
+    }
+    return container;
+}
+function renderErrorStateBlock(block, tokens) {
+    const title = blockStr(block, "title") || "Something went wrong";
+    const description = blockStr(block, "description") || "An error occurred. Please try again.";
+    const retryLabel = blockStr(block, "retryLabel") || blockStr(block, "action") || "Retry";
+    const container = figma.createFrame();
+    container.name = "Error State";
+    container.layoutMode = "VERTICAL";
+    container.primaryAxisSizingMode = "AUTO";
+    container.counterAxisSizingMode = "FIXED";
+    container.layoutAlign = "STRETCH";
+    setPadding(container, spacing(tokens, 5));
+    container.itemSpacing = spacing(tokens, 3);
+    container.primaryAxisAlignItems = "CENTER";
+    container.counterAxisAlignItems = "CENTER";
+    container.cornerRadius = tokens.radius.md;
+    container.fills = [solid("#FFF5F5")];
+    container.strokes = [solid(tokens.colors.semantic.error)];
+    container.strokeWeight = 1;
+    const iconCircle = figma.createFrame();
+    iconCircle.name = "Error icon placeholder";
+    iconCircle.resize(40, 40);
+    iconCircle.cornerRadius = 999;
+    iconCircle.fills = [solid("#FEE2E2")];
+    container.appendChild(iconCircle);
+    container.appendChild(createTokenText(title, tokens, "h2", "bold", tokens.colors.semantic.error));
+    container.appendChild(createTokenText(description, tokens, "body", "regular", tokens.colors.neutral["500"]));
+    const retryBtn = createPrimaryButton(retryLabel, tokens);
+    retryBtn.fills = [solid(tokens.colors.semantic.error)];
+    container.appendChild(retryBtn);
+    return container;
+}
+function renderSuccessStateBlock(block, tokens) {
+    const title = blockStr(block, "title") || "Done!";
+    const description = blockStr(block, "description") || "Your action was completed successfully.";
+    const action = blockStr(block, "action") || blockStr(block, "cta");
+    const container = figma.createFrame();
+    container.name = "Success State";
+    container.layoutMode = "VERTICAL";
+    container.primaryAxisSizingMode = "AUTO";
+    container.counterAxisSizingMode = "FIXED";
+    container.layoutAlign = "STRETCH";
+    setPadding(container, spacing(tokens, 5));
+    container.itemSpacing = spacing(tokens, 3);
+    container.primaryAxisAlignItems = "CENTER";
+    container.counterAxisAlignItems = "CENTER";
+    container.cornerRadius = tokens.radius.md;
+    container.fills = [solid("#F0FDF4")];
+    container.strokes = [solid(tokens.colors.semantic.success)];
+    container.strokeWeight = 1;
+    const iconCircle = figma.createFrame();
+    iconCircle.name = "Success icon placeholder";
+    iconCircle.resize(40, 40);
+    iconCircle.cornerRadius = 999;
+    iconCircle.fills = [solid("#D1FAE5")];
+    container.appendChild(iconCircle);
+    container.appendChild(createTokenText(title, tokens, "h2", "bold", tokens.colors.semantic.success));
+    container.appendChild(createTokenText(description, tokens, "body", "regular", tokens.colors.neutral["500"]));
+    if (action) {
+        const actionBtn = createPrimaryButton(action, tokens);
+        actionBtn.fills = [solid(tokens.colors.semantic.success)];
+        container.appendChild(actionBtn);
+    }
+    return container;
+}
+function renderGenericContentBlock(block, tokens) {
+    const blockType = typeof block.type === "string" ? block.type : "";
+    const title = blockStr(block, "title") || blockStr(block, "label") || (blockType ? blockType : "Content Block");
+    const description = blockStr(block, "description") || blockStr(block, "content") || blockStr(block, "body");
+    const container = createBlockContainer(title, tokens);
+    const heading = createTokenText(title, tokens, "h2", "bold", tokens.colors.neutral["900"]);
+    heading.layoutAlign = "STRETCH";
+    container.appendChild(heading);
+    if (description) {
+        const text = createTokenText(truncateText(description, 300), tokens, "body", "regular", tokens.colors.neutral["700"]);
+        text.layoutAlign = "STRETCH";
+        text.lineHeight = { value: 28, unit: "PIXELS" };
+        container.appendChild(text);
+    }
+    else {
+        const placeholder = figma.createFrame();
+        placeholder.name = "Content placeholder";
+        placeholder.layoutAlign = "STRETCH";
+        placeholder.primaryAxisSizingMode = "FIXED";
+        placeholder.counterAxisSizingMode = "FIXED";
+        placeholder.resize(1100, 48);
+        placeholder.cornerRadius = tokens.radius.sm;
+        placeholder.fills = [solid(tokens.colors.neutral["50"])];
+        placeholder.strokes = [solid(tokens.colors.neutral["200"])];
+        placeholder.strokeWeight = 1;
+        container.appendChild(placeholder);
+    }
+    return container;
+}
+// ─── Design Plan layout helpers ───────────────────────────────────────────────
+function createDesignPlanHeader(issueKey, title, objective, targetUser, layoutPattern, tokens) {
+    const header = figma.createFrame();
+    header.name = "Design Plan Header";
+    header.layoutMode = "VERTICAL";
+    header.primaryAxisSizingMode = "AUTO";
+    header.counterAxisSizingMode = "FIXED";
+    header.layoutAlign = "STRETCH";
+    setPadding(header, spacing(tokens, 5));
+    header.itemSpacing = spacing(tokens, 2);
+    header.cornerRadius = tokens.radius.lg;
+    header.fills = [solid("#FFFFFF")];
+    header.strokes = [solid(tokens.colors.neutral["200"])];
+    header.strokeWeight = 1;
+    applyShadow(header, tokens, "cardSubtle");
+    const badgeRow = createRow("Badges", spacing(tokens, 2));
+    badgeRow.appendChild(createModeBadge("Screen Draft", tokens));
+    badgeRow.appendChild(createModeBadge(layoutPattern.replace(/_/g, " "), tokens));
+    header.appendChild(badgeRow);
+    const titleText = createTokenText(title, tokens, "display", "bold", tokens.colors.neutral["900"]);
+    titleText.layoutAlign = "STRETCH";
+    header.appendChild(titleText);
+    const meta = createTokenText(`Issue: ${issueKey} | Target user: ${targetUser}`, tokens, "body", "regular", tokens.colors.neutral["500"]);
+    meta.layoutAlign = "STRETCH";
+    header.appendChild(meta);
+    const objectiveText = createTokenText(truncateText(objective, 200), tokens, "body", "regular", tokens.colors.neutral["700"]);
+    objectiveText.layoutAlign = "STRETCH";
+    objectiveText.lineHeight = { value: 28, unit: "PIXELS" };
+    header.appendChild(objectiveText);
+    return header;
+}
+function createBlockContainer(name, tokens) {
+    const container = figma.createFrame();
+    container.name = name;
+    container.layoutMode = "VERTICAL";
+    container.primaryAxisSizingMode = "AUTO";
+    container.counterAxisSizingMode = "FIXED";
+    container.layoutAlign = "STRETCH";
+    setPadding(container, spacing(tokens, 4));
+    container.itemSpacing = spacing(tokens, 3);
+    container.cornerRadius = tokens.radius.md;
+    container.fills = [solid("#FFFFFF")];
+    container.strokes = [solid(tokens.colors.neutral["200"])];
+    container.strokeWeight = 1;
+    applyShadow(container, tokens, "cardSubtle");
+    return container;
+}
+function createGenericMetricCard(label, value, description, tokens) {
+    const card = figma.createFrame();
+    card.name = label;
+    card.layoutMode = "VERTICAL";
+    card.primaryAxisSizingMode = "AUTO";
+    card.counterAxisSizingMode = "FIXED";
+    card.resize(280, 100);
+    card.paddingTop = spacing(tokens, 3);
+    card.paddingBottom = spacing(tokens, 3);
+    card.paddingLeft = spacing(tokens, 3);
+    card.paddingRight = spacing(tokens, 3);
+    card.itemSpacing = spacing(tokens, 1);
+    card.cornerRadius = tokens.radius.md;
+    card.fills = [solid("#FFFFFF")];
+    card.strokes = [solid(tokens.colors.neutral["200"])];
+    card.strokeWeight = 1;
+    applyShadow(card, tokens, "cardSubtle");
+    card.appendChild(createTokenText(label, tokens, "caption", "regular", tokens.colors.neutral["500"]));
+    card.appendChild(createTokenText(value, tokens, "h2", "bold", tokens.colors.neutral["900"]));
+    if (description) {
+        const descText = createTokenText(truncateText(description, 60), tokens, "caption", "regular", tokens.colors.neutral["500"]);
+        descText.layoutAlign = "STRETCH";
+        card.appendChild(descText);
+    }
+    return card;
+}
+function blockStr(block, key) {
+    const v = block[key];
+    return typeof v === "string" && v.trim() ? v.trim() : "";
+}
+function blockArr(block, key) {
+    const v = block[key];
+    return Array.isArray(v) ? v : [];
+}
+// ─────────────────────────────────────────────────────────────────────────────
 function createDraftFrame(job, tokens) {
     const issueKey = textOrFallback(job.issueKey, "No issue key");
     const briefTitle = textOrFallback(job.briefTitle, "Untitled design job");
@@ -190,6 +886,893 @@ function createDraftFrame(job, tokens) {
     frame.x = position.x;
     frame.y = position.y;
     return frame;
+}
+function createDashboardDraft(job, tokens) {
+    const issueKey = textOrFallback(job.issueKey, "No issue key");
+    const briefTitle = textOrFallback(job.briefTitle, "Untitled dashboard job");
+    const subtype = getConversationDashboardSubtype(job);
+    const badgeLabel = subtype === "conversation" ? "Conversation Dashboard" : "Analytics Dashboard";
+    const frameHeight = subtype === "conversation" ? 1136 : 900;
+    const bodyHeight = frameHeight - 56;
+    const frame = figma.createFrame();
+    frame.name = `AI Dashboard - ${issueKey} - ${briefTitle}`;
+    frame.resize(1440, frameHeight);
+    frame.fills = [solid(tokens.colors.neutral["50"])];
+    frame.layoutMode = "VERTICAL";
+    frame.primaryAxisSizingMode = "FIXED";
+    frame.counterAxisSizingMode = "FIXED";
+    frame.itemSpacing = 0;
+    frame.paddingTop = 0;
+    frame.paddingRight = 0;
+    frame.paddingBottom = 0;
+    frame.paddingLeft = 0;
+    frame.appendChild(createDashboardNav(briefTitle, badgeLabel, tokens));
+    const body = figma.createFrame();
+    body.name = "Body";
+    body.layoutMode = "HORIZONTAL";
+    body.primaryAxisSizingMode = "FIXED";
+    body.counterAxisSizingMode = "FIXED";
+    body.resize(1440, bodyHeight);
+    body.fills = [];
+    body.itemSpacing = 0;
+    body.paddingTop = 0;
+    body.paddingRight = 0;
+    body.paddingBottom = 0;
+    body.paddingLeft = 0;
+    body.layoutGrow = 1;
+    frame.appendChild(body);
+    if (subtype === "conversation") {
+        body.appendChild(createConversationDashboardSidebar(bodyHeight, tokens));
+        body.appendChild(createConversationDashboardMain(job, bodyHeight, tokens));
+    }
+    else {
+        body.appendChild(createDashboardSidebar(tokens));
+        body.appendChild(createDashboardMain(job, tokens));
+    }
+    const position = findNextFramePosition();
+    figma.currentPage.appendChild(frame);
+    frame.x = position.x;
+    frame.y = position.y;
+    return frame;
+}
+function createDashboardNav(title, badgeLabel, tokens) {
+    const nav = figma.createFrame();
+    nav.name = "Top Nav";
+    nav.layoutMode = "HORIZONTAL";
+    nav.primaryAxisSizingMode = "FIXED";
+    nav.counterAxisSizingMode = "FIXED";
+    nav.resize(1440, 56);
+    nav.paddingTop = 0;
+    nav.paddingBottom = 0;
+    nav.paddingLeft = spacing(tokens, 4);
+    nav.paddingRight = spacing(tokens, 4);
+    nav.counterAxisAlignItems = "CENTER";
+    nav.primaryAxisAlignItems = "SPACE_BETWEEN";
+    nav.fills = [solid("#FFFFFF")];
+    nav.strokes = [solid(tokens.colors.neutral["200"])];
+    nav.strokeWeight = 1;
+    const logo = createTokenText(title, tokens, "label", "bold", tokens.colors.neutral["900"]);
+    nav.appendChild(logo);
+    const badge = createModeBadge(badgeLabel, tokens);
+    nav.appendChild(badge);
+    const avatar = figma.createFrame();
+    avatar.name = "User avatar";
+    avatar.resize(32, 32);
+    avatar.cornerRadius = 999;
+    avatar.fills = [solid(tokens.colors.neutral["200"])];
+    nav.appendChild(avatar);
+    return nav;
+}
+function createDashboardSidebar(tokens) {
+    const sidebar = figma.createFrame();
+    sidebar.name = "Sidebar";
+    sidebar.layoutMode = "VERTICAL";
+    sidebar.primaryAxisSizingMode = "FIXED";
+    sidebar.counterAxisSizingMode = "FIXED";
+    sidebar.resize(220, 844);
+    sidebar.paddingTop = spacing(tokens, 4);
+    sidebar.paddingBottom = spacing(tokens, 4);
+    sidebar.paddingLeft = spacing(tokens, 3);
+    sidebar.paddingRight = spacing(tokens, 3);
+    sidebar.itemSpacing = spacing(tokens, 1);
+    sidebar.fills = [solid("#FFFFFF")];
+    sidebar.strokes = [solid(tokens.colors.neutral["200"])];
+    sidebar.strokeWeight = 1;
+    const navItems = ["Overview", "Analytics", "Content", "Audience", "Settings"];
+    for (let i = 0; i < navItems.length; i++) {
+        const item = figma.createFrame();
+        item.name = navItems[i];
+        item.layoutMode = "HORIZONTAL";
+        item.primaryAxisSizingMode = "FIXED";
+        item.counterAxisSizingMode = "AUTO";
+        item.resize(196, 36);
+        item.paddingTop = spacing(tokens, 1);
+        item.paddingBottom = spacing(tokens, 1);
+        item.paddingLeft = spacing(tokens, 2);
+        item.paddingRight = spacing(tokens, 2);
+        item.counterAxisAlignItems = "CENTER";
+        item.cornerRadius = tokens.radius.sm;
+        item.fills = i === 0 ? [solid(tokens.colors.neutral["50"])] : [];
+        item.strokes = i === 0 ? [solid(tokens.colors.neutral["200"])] : [];
+        item.strokeWeight = 1;
+        item.appendChild(createTokenText(navItems[i], tokens, "label", i === 0 ? "bold" : "regular", i === 0 ? tokens.colors.neutral["900"] : tokens.colors.neutral["700"]));
+        sidebar.appendChild(item);
+    }
+    return sidebar;
+}
+function createDashboardMain(job, tokens) {
+    const main = figma.createFrame();
+    main.name = "Main Content";
+    main.layoutMode = "VERTICAL";
+    main.primaryAxisSizingMode = "FIXED";
+    main.counterAxisSizingMode = "FIXED";
+    main.resize(1220, 844);
+    main.paddingTop = spacing(tokens, 5);
+    main.paddingBottom = spacing(tokens, 5);
+    main.paddingLeft = spacing(tokens, 5);
+    main.paddingRight = spacing(tokens, 5);
+    main.itemSpacing = spacing(tokens, 4);
+    main.fills = [];
+    const pageTitle = createTokenText(textOrFallback(job.briefTitle, "Dashboard Overview"), tokens, "h1", "bold", tokens.colors.neutral["900"]);
+    pageTitle.layoutAlign = "STRETCH";
+    main.appendChild(pageTitle);
+    const subtitle = createTokenText(truncateText(textOrFallback(job.objective, "Monitor key metrics at a glance."), 120), tokens, "body", "regular", tokens.colors.neutral["500"]);
+    subtitle.layoutAlign = "STRETCH";
+    main.appendChild(subtitle);
+    main.appendChild(createMetricCardsRow(tokens));
+    main.appendChild(createChartsRow(tokens));
+    main.appendChild(createDashboardTablePlaceholder(tokens));
+    return main;
+}
+function createMetricCardsRow(tokens) {
+    const labels = ["Total Followers", "Posts This Month", "Avg. Engagement", "Link Clicks"];
+    const values = ["12,450", "38", "4.2%", "1,830"];
+    const cards = labels.map((label, i) => createMetricCard(label, values[i], tokens));
+    const row = createHorizontalGroup(cards, spacing(tokens, 3));
+    row.name = "Metric Cards";
+    return row;
+}
+function createMetricCard(label, value, tokens) {
+    const card = figma.createFrame();
+    card.name = label;
+    card.layoutMode = "VERTICAL";
+    card.primaryAxisSizingMode = "AUTO";
+    card.counterAxisSizingMode = "FIXED";
+    card.resize(264, 90);
+    card.paddingTop = spacing(tokens, 3);
+    card.paddingBottom = spacing(tokens, 3);
+    card.paddingLeft = spacing(tokens, 3);
+    card.paddingRight = spacing(tokens, 3);
+    card.itemSpacing = spacing(tokens, 1);
+    card.cornerRadius = tokens.radius.md;
+    card.fills = [solid("#FFFFFF")];
+    card.strokes = [solid(tokens.colors.neutral["200"])];
+    card.strokeWeight = 1;
+    applyShadow(card, tokens, "cardSubtle");
+    card.appendChild(createTokenText(label, tokens, "caption", "regular", tokens.colors.neutral["500"]));
+    card.appendChild(createTokenText(value, tokens, "h2", "bold", tokens.colors.neutral["900"]));
+    return card;
+}
+function createChartsRow(tokens) {
+    const charts = [
+        createChartPlaceholder("Follower Growth", 700, tokens),
+        createChartPlaceholder("Engagement by Post", 460, tokens)
+    ];
+    const row = createHorizontalGroup(charts, spacing(tokens, 3));
+    row.name = "Charts";
+    return row;
+}
+function createChartPlaceholder(title, width, tokens) {
+    const card = figma.createFrame();
+    card.name = title;
+    card.layoutMode = "VERTICAL";
+    card.primaryAxisSizingMode = "AUTO";
+    card.counterAxisSizingMode = "FIXED";
+    card.resize(width, 220);
+    card.paddingTop = spacing(tokens, 3);
+    card.paddingBottom = spacing(tokens, 3);
+    card.paddingLeft = spacing(tokens, 3);
+    card.paddingRight = spacing(tokens, 3);
+    card.itemSpacing = spacing(tokens, 2);
+    card.cornerRadius = tokens.radius.md;
+    card.fills = [solid("#FFFFFF")];
+    card.strokes = [solid(tokens.colors.neutral["200"])];
+    card.strokeWeight = 1;
+    applyShadow(card, tokens, "cardSubtle");
+    card.appendChild(createTokenText(title, tokens, "label", "bold", tokens.colors.neutral["900"]));
+    const chartArea = figma.createFrame();
+    chartArea.name = "Chart area";
+    chartArea.layoutAlign = "STRETCH";
+    chartArea.primaryAxisSizingMode = "FIXED";
+    chartArea.counterAxisSizingMode = "FIXED";
+    chartArea.resize(width - spacing(tokens, 6), 150);
+    chartArea.cornerRadius = tokens.radius.sm;
+    chartArea.fills = [solid(tokens.colors.neutral["50"])];
+    chartArea.strokes = [solid(tokens.colors.neutral["200"])];
+    chartArea.strokeWeight = 1;
+    card.appendChild(chartArea);
+    return card;
+}
+function createDashboardTablePlaceholder(tokens) {
+    const card = figma.createFrame();
+    card.name = "Recent Posts Table";
+    card.layoutMode = "VERTICAL";
+    card.primaryAxisSizingMode = "AUTO";
+    card.counterAxisSizingMode = "FIXED";
+    card.resize(1180, 180);
+    card.paddingTop = spacing(tokens, 3);
+    card.paddingBottom = spacing(tokens, 3);
+    card.paddingLeft = spacing(tokens, 3);
+    card.paddingRight = spacing(tokens, 3);
+    card.itemSpacing = spacing(tokens, 2);
+    card.cornerRadius = tokens.radius.md;
+    card.fills = [solid("#FFFFFF")];
+    card.strokes = [solid(tokens.colors.neutral["200"])];
+    card.strokeWeight = 1;
+    applyShadow(card, tokens, "cardSubtle");
+    card.appendChild(createTokenText("Recent Posts", tokens, "label", "bold", tokens.colors.neutral["900"]));
+    const headerRow = createRow("Table header", spacing(tokens, 3));
+    headerRow.layoutAlign = "STRETCH";
+    const cols = ["Post", "Date", "Likes", "Comments", "Reach"];
+    for (const col of cols) {
+        const cell = createTokenText(col, tokens, "caption", "bold", tokens.colors.neutral["500"]);
+        cell.layoutGrow = col === "Post" ? 1 : 0;
+        if (col !== "Post")
+            cell.resize(100, cell.height);
+        headerRow.appendChild(cell);
+    }
+    card.appendChild(headerRow);
+    for (let r = 0; r < 2; r++) {
+        const rowFrame = figma.createFrame();
+        rowFrame.name = `Row ${r + 1}`;
+        rowFrame.layoutMode = "HORIZONTAL";
+        rowFrame.primaryAxisSizingMode = "AUTO";
+        rowFrame.counterAxisSizingMode = "FIXED";
+        rowFrame.layoutAlign = "STRETCH";
+        rowFrame.resize(1180 - spacing(tokens, 6), 28);
+        rowFrame.counterAxisAlignItems = "CENTER";
+        rowFrame.fills = r % 2 === 0 ? [] : [solid(tokens.colors.neutral["50"])];
+        rowFrame.itemSpacing = spacing(tokens, 3);
+        rowFrame.paddingLeft = spacing(tokens, 1);
+        rowFrame.paddingRight = spacing(tokens, 1);
+        const cells = ["Post caption placeholder...", "Jun 2026", "1,200", "48", "9,400"];
+        for (let c = 0; c < cells.length; c++) {
+            const cell = createTokenText(cells[c], tokens, "caption", "regular", tokens.colors.neutral["700"]);
+            cell.layoutGrow = c === 0 ? 1 : 0;
+            if (c !== 0)
+                cell.resize(100, cell.height);
+            rowFrame.appendChild(cell);
+        }
+        card.appendChild(rowFrame);
+    }
+    return card;
+}
+function getConversationDashboardSubtype(job) {
+    const text = [
+        job.briefTitle,
+        job.title,
+        job.objective,
+        job.figmaInstruction,
+        job.requiredSections,
+        job.acceptanceCriteria
+    ].join(" ").toLowerCase();
+    const matched = conversationDashboardKeywords.filter(k => text.indexOf(k) >= 0);
+    console.log(`[Dashboard] subtype check for: "${job.briefTitle}"`);
+    console.log(`[Dashboard] matched dashboard content keywords: ${JSON.stringify(matched)}`);
+    const subtype = matched.length > 0 ? "conversation" : "analytics";
+    console.log(`[Dashboard] selected dashboard subtype: ${subtype}-dashboard`);
+    return subtype;
+}
+function createConversationDashboardSidebar(bodyHeight, tokens) {
+    const sidebar = figma.createFrame();
+    sidebar.name = "Sidebar";
+    sidebar.layoutMode = "VERTICAL";
+    sidebar.primaryAxisSizingMode = "FIXED";
+    sidebar.counterAxisSizingMode = "FIXED";
+    sidebar.resize(220, bodyHeight);
+    sidebar.paddingTop = spacing(tokens, 4);
+    sidebar.paddingBottom = spacing(tokens, 4);
+    sidebar.paddingLeft = spacing(tokens, 3);
+    sidebar.paddingRight = spacing(tokens, 3);
+    sidebar.itemSpacing = spacing(tokens, 1);
+    sidebar.fills = [solid("#FFFFFF")];
+    sidebar.strokes = [solid(tokens.colors.neutral["200"])];
+    sidebar.strokeWeight = 1;
+    const navItems = ["Conversations", "AI Replies", "Handoff Queue", "Sync", "Settings"];
+    for (let i = 0; i < navItems.length; i++) {
+        const item = figma.createFrame();
+        item.name = navItems[i];
+        item.layoutMode = "HORIZONTAL";
+        item.primaryAxisSizingMode = "FIXED";
+        item.counterAxisSizingMode = "AUTO";
+        item.resize(196, 36);
+        item.paddingTop = spacing(tokens, 1);
+        item.paddingBottom = spacing(tokens, 1);
+        item.paddingLeft = spacing(tokens, 2);
+        item.paddingRight = spacing(tokens, 2);
+        item.counterAxisAlignItems = "CENTER";
+        item.cornerRadius = tokens.radius.sm;
+        item.fills = i === 0 ? [solid(tokens.colors.neutral["50"])] : [];
+        item.strokes = i === 0 ? [solid(tokens.colors.neutral["200"])] : [];
+        item.strokeWeight = 1;
+        item.appendChild(createTokenText(navItems[i], tokens, "label", i === 0 ? "bold" : "regular", i === 0 ? tokens.colors.neutral["900"] : tokens.colors.neutral["700"]));
+        sidebar.appendChild(item);
+    }
+    return sidebar;
+}
+function createConversationDashboardMain(job, bodyHeight, tokens) {
+    // inner width = 1220 - 2*spacing[5] = 1220 - 64 = 1156px
+    const main = figma.createFrame();
+    main.name = "Main Content";
+    main.layoutMode = "VERTICAL";
+    main.primaryAxisSizingMode = "FIXED";
+    main.counterAxisSizingMode = "FIXED";
+    main.resize(1220, bodyHeight);
+    main.paddingTop = spacing(tokens, 5);
+    main.paddingBottom = spacing(tokens, 5);
+    main.paddingLeft = spacing(tokens, 5);
+    main.paddingRight = spacing(tokens, 5);
+    main.itemSpacing = spacing(tokens, 4);
+    main.fills = [];
+    main.clipsContent = true;
+    const pageTitle = createTokenText(textOrFallback(job.briefTitle, "Conversation Dashboard"), tokens, "h1", "bold", tokens.colors.neutral["900"]);
+    pageTitle.layoutAlign = "STRETCH";
+    main.appendChild(pageTitle);
+    const subtitle = createTokenText(truncateText(textOrFallback(job.objective, "Monitor AI conversation performance and handoff queue."), 120), tokens, "body", "regular", tokens.colors.neutral["500"]);
+    subtitle.layoutAlign = "STRETCH";
+    main.appendChild(subtitle);
+    main.appendChild(createConversationMetricsRow(tokens));
+    main.appendChild(createConversationMiddleRow(tokens));
+    main.appendChild(createConversationBottomRow(tokens));
+    main.appendChild(createStatePreviewsRow(tokens));
+    return main;
+}
+function createConversationMetricsRow(tokens) {
+    // 4 × 277px + 3 × 16px gap = 1156px
+    const metrics = [
+        { label: "Total Conversations", value: "1,284", trend: "↑ 12% vs last week", up: true },
+        { label: "AI Replied", value: "1,031", trend: "80% of total · ↑ 4%", up: true },
+        { label: "Handed Off", value: "186", trend: "14% of total · ↓ 2%", up: false },
+        { label: "Pending Review", value: "67", trend: "↓ 8% vs yesterday", up: true }
+    ];
+    const cards = metrics.map(m => createConversationMetricCard(m.label, m.value, m.trend, m.up, tokens));
+    const row = createHorizontalGroup(cards, spacing(tokens, 3));
+    row.name = "Conversation Metrics";
+    return row;
+}
+function createConversationMetricCard(label, value, trend, trendPositive, tokens) {
+    const card = figma.createFrame();
+    card.name = label;
+    card.layoutMode = "VERTICAL";
+    card.primaryAxisSizingMode = "AUTO";
+    card.counterAxisSizingMode = "FIXED";
+    card.resize(277, 100);
+    card.paddingTop = spacing(tokens, 3);
+    card.paddingBottom = spacing(tokens, 3);
+    card.paddingLeft = spacing(tokens, 3);
+    card.paddingRight = spacing(tokens, 3);
+    card.itemSpacing = spacing(tokens, 1);
+    card.cornerRadius = tokens.radius.md;
+    card.fills = [solid("#FFFFFF")];
+    card.strokes = [solid(tokens.colors.neutral["200"])];
+    card.strokeWeight = 1;
+    applyShadow(card, tokens, "cardSubtle");
+    const labelText = createTokenText(label, tokens, "caption", "regular", tokens.colors.neutral["500"]);
+    labelText.layoutAlign = "STRETCH";
+    card.appendChild(labelText);
+    const valueText = createTokenText(value, tokens, "h2", "bold", tokens.colors.neutral["900"]);
+    valueText.layoutAlign = "STRETCH";
+    card.appendChild(valueText);
+    const trendColor = trendPositive ? tokens.colors.semantic.success : tokens.colors.semantic.error;
+    const trendText = createTokenText(trend, tokens, "caption", "regular", trendColor);
+    trendText.layoutAlign = "STRETCH";
+    card.appendChild(trendText);
+    return card;
+}
+function createConversationMiddleRow(tokens) {
+    // 700px + 16px gap + 440px = 1156px
+    const row = createHorizontalGroup([
+        createRecentConversationsSection(tokens),
+        createAiQualitySection(tokens)
+    ], spacing(tokens, 3));
+    row.name = "Middle Row";
+    return row;
+}
+function createRecentConversationsSection(tokens) {
+    const card = figma.createFrame();
+    card.name = "Recent Conversations";
+    card.layoutMode = "VERTICAL";
+    card.primaryAxisSizingMode = "FIXED";
+    card.counterAxisSizingMode = "FIXED";
+    card.resize(700, 232);
+    card.paddingTop = spacing(tokens, 3);
+    card.paddingBottom = spacing(tokens, 3);
+    card.paddingLeft = spacing(tokens, 3);
+    card.paddingRight = spacing(tokens, 3);
+    card.itemSpacing = spacing(tokens, 2);
+    card.cornerRadius = tokens.radius.md;
+    card.fills = [solid("#FFFFFF")];
+    card.strokes = [solid(tokens.colors.neutral["200"])];
+    card.strokeWeight = 1;
+    card.clipsContent = true;
+    applyShadow(card, tokens, "cardSubtle");
+    const sectionHeader = createRow("section header", spacing(tokens, 2));
+    sectionHeader.primaryAxisAlignItems = "SPACE_BETWEEN";
+    const heading = createTokenText("Recent Conversations", tokens, "label", "bold", tokens.colors.neutral["900"]);
+    heading.layoutGrow = 1;
+    sectionHeader.appendChild(heading);
+    sectionHeader.appendChild(createTokenText("View all →", tokens, "caption", "regular", tokens.colors.semantic.info));
+    card.appendChild(sectionHeader);
+    const conversations = [
+        { handle: "@maria_s", message: "Can I reschedule my order?", confidence: 94, status: "AI Replied", time: "2m ago" },
+        { handle: "@john_b", message: "This is not what I ordered...", confidence: 61, status: "Handed Off", time: "4m ago" },
+        { handle: "@studio.k", message: "Do you ship internationally?", confidence: 88, status: "AI Replied", time: "7m ago" },
+        { handle: "@petra.r", message: "I need to speak to someone", confidence: 72, status: "In Queue", time: "12m ago" }
+    ];
+    const avatarBgs = [tokens.colors.semantic.info, tokens.colors.semantic.error, tokens.colors.accent.ai, tokens.colors.semantic.warning];
+    for (let i = 0; i < conversations.length; i++) {
+        const conv = conversations[i];
+        const row = createRow("conversation row", spacing(tokens, 2));
+        row.counterAxisAlignItems = "CENTER";
+        row.appendChild(createInitialsAvatar(conv.handle, avatarBgs[i % avatarBgs.length], tokens));
+        const infoCol = figma.createFrame();
+        infoCol.name = "info";
+        infoCol.layoutMode = "VERTICAL";
+        infoCol.primaryAxisSizingMode = "AUTO";
+        infoCol.counterAxisSizingMode = "FIXED";
+        infoCol.resize(180, 36);
+        infoCol.fills = [];
+        infoCol.itemSpacing = 2;
+        infoCol.layoutGrow = 1;
+        infoCol.appendChild(createTokenText(conv.handle, tokens, "caption", "bold", tokens.colors.neutral["900"]));
+        infoCol.appendChild(createTokenText(truncateText(conv.message, 34), tokens, "caption", "regular", tokens.colors.neutral["500"]));
+        row.appendChild(infoCol);
+        const confBg = conv.confidence >= 90 ? "#D1FAE5" : (conv.confidence >= 70 ? "#FEF3C7" : "#FEE2E2");
+        const confClr = conv.confidence >= 90 ? tokens.colors.semantic.success : (conv.confidence >= 70 ? tokens.colors.semantic.warning : tokens.colors.semantic.error);
+        row.appendChild(createStatusPill(`${conv.confidence}%`, confBg, confClr, tokens));
+        const statusBg = conv.status === "AI Replied" ? "#D1FAE5" : (conv.status === "In Queue" ? "#DBEAFE" : "#FEF3C7");
+        const statusClr = conv.status === "AI Replied" ? tokens.colors.semantic.success : (conv.status === "In Queue" ? tokens.colors.semantic.info : tokens.colors.semantic.warning);
+        row.appendChild(createStatusPill(conv.status, statusBg, statusClr, tokens));
+        row.appendChild(createTokenText(conv.time, tokens, "caption", "regular", tokens.colors.neutral["500"]));
+        card.appendChild(row);
+    }
+    return card;
+}
+function createAiQualitySection(tokens) {
+    // 700 + 16 gap + 440 = 1156px
+    const card = figma.createFrame();
+    card.name = "AI Reply Quality";
+    card.layoutMode = "VERTICAL";
+    card.primaryAxisSizingMode = "FIXED";
+    card.counterAxisSizingMode = "FIXED";
+    card.resize(440, 232);
+    card.paddingTop = spacing(tokens, 3);
+    card.paddingBottom = spacing(tokens, 3);
+    card.paddingLeft = spacing(tokens, 3);
+    card.paddingRight = spacing(tokens, 3);
+    card.itemSpacing = spacing(tokens, 2);
+    card.cornerRadius = tokens.radius.md;
+    card.fills = [solid("#FFFFFF")];
+    card.strokes = [solid(tokens.colors.neutral["200"])];
+    card.strokeWeight = 1;
+    card.clipsContent = true;
+    applyShadow(card, tokens, "cardSubtle");
+    const sectionHeader = createRow("section header", spacing(tokens, 2));
+    sectionHeader.primaryAxisAlignItems = "SPACE_BETWEEN";
+    const heading = createTokenText("AI Reply Quality", tokens, "label", "bold", tokens.colors.neutral["900"]);
+    heading.layoutGrow = 1;
+    sectionHeader.appendChild(heading);
+    sectionHeader.appendChild(createStatusPill("82% high", "#D1FAE5", tokens.colors.semantic.success, tokens));
+    card.appendChild(sectionHeader);
+    const summaryText = createTokenText("today · ↑ 6% vs yesterday", tokens, "caption", "regular", tokens.colors.neutral["500"]);
+    summaryText.layoutAlign = "STRETCH";
+    card.appendChild(summaryText);
+    const bands = [
+        { label: "High confidence ≥90%", count: "580", pct: 0.81, color: tokens.colors.semantic.success },
+        { label: "Medium confidence 70–89%", count: "320", pct: 0.45, color: tokens.colors.semantic.warning },
+        { label: "Low confidence <70%", count: "131", pct: 0.18, color: tokens.colors.semantic.error }
+    ];
+    for (const band of bands) {
+        const bandRow = figma.createFrame();
+        bandRow.name = band.label;
+        bandRow.layoutMode = "VERTICAL";
+        bandRow.primaryAxisSizingMode = "AUTO";
+        bandRow.counterAxisSizingMode = "FIXED";
+        bandRow.layoutAlign = "STRETCH";
+        bandRow.fills = [];
+        bandRow.itemSpacing = spacing(tokens, 1);
+        const labelRow = createRow("label row", spacing(tokens, 2));
+        const lbl = createTokenText(band.label, tokens, "caption", "regular", tokens.colors.neutral["700"]);
+        lbl.layoutGrow = 1;
+        labelRow.appendChild(lbl);
+        labelRow.appendChild(createTokenText(band.count, tokens, "caption", "bold", tokens.colors.neutral["900"]));
+        bandRow.appendChild(labelRow);
+        const barTrack = figma.createFrame();
+        barTrack.name = "bar track";
+        barTrack.layoutMode = "HORIZONTAL";
+        barTrack.primaryAxisSizingMode = "FIXED";
+        barTrack.counterAxisSizingMode = "FIXED";
+        barTrack.resize(392, 10);
+        barTrack.cornerRadius = 999;
+        barTrack.fills = [solid(tokens.colors.neutral["200"])];
+        barTrack.clipsContent = true;
+        const barFill = figma.createFrame();
+        barFill.name = "fill";
+        barFill.resize(Math.max(8, Math.round(392 * band.pct)), 10);
+        barFill.fills = [solid(band.color)];
+        barTrack.appendChild(barFill);
+        bandRow.appendChild(barTrack);
+        card.appendChild(bandRow);
+    }
+    return card;
+}
+function createConversationBottomRow(tokens) {
+    // 560px + 16px gap + 580px = 1156px
+    const row = createHorizontalGroup([
+        createHandoffQueueSection(tokens),
+        createSyncStatusSection(tokens)
+    ], spacing(tokens, 3));
+    row.name = "Bottom Row";
+    return row;
+}
+function createHandoffQueueSection(tokens) {
+    const card = figma.createFrame();
+    card.name = "Handoff Queue";
+    card.layoutMode = "VERTICAL";
+    card.primaryAxisSizingMode = "FIXED";
+    card.counterAxisSizingMode = "FIXED";
+    card.resize(560, 190);
+    card.paddingTop = spacing(tokens, 3);
+    card.paddingBottom = spacing(tokens, 3);
+    card.paddingLeft = spacing(tokens, 3);
+    card.paddingRight = spacing(tokens, 3);
+    card.itemSpacing = spacing(tokens, 2);
+    card.cornerRadius = tokens.radius.md;
+    card.fills = [solid("#FFFFFF")];
+    card.strokes = [solid(tokens.colors.semantic.warning)];
+    card.strokeWeight = 1;
+    card.clipsContent = true;
+    applyShadow(card, tokens, "cardSubtle");
+    const headerRow = createRow("header", spacing(tokens, 2));
+    headerRow.counterAxisAlignItems = "CENTER";
+    const heading = createTokenText("Handoff Queue", tokens, "label", "bold", tokens.colors.neutral["900"]);
+    heading.layoutGrow = 1;
+    headerRow.appendChild(heading);
+    headerRow.appendChild(createStatusPill("3 waiting", "#FEF3C7", tokens.colors.semantic.warning, tokens));
+    card.appendChild(headerRow);
+    const queueItems = [
+        { handle: "@john_b", reason: "Low confidence", wait: "4m", priority: "high" },
+        { handle: "@petra.r", reason: "Human requested", wait: "12m", priority: "medium" },
+        { handle: "@shop.daily", reason: "Unknown intent", wait: "28m", priority: "medium" }
+    ];
+    const avatarBgs = [tokens.colors.semantic.error, tokens.colors.semantic.warning, tokens.colors.semantic.info];
+    for (let i = 0; i < queueItems.length; i++) {
+        const item = queueItems[i];
+        const row = createRow("queue item", spacing(tokens, 2));
+        row.counterAxisAlignItems = "CENTER";
+        const priorityDot = figma.createEllipse();
+        priorityDot.resize(8, 8);
+        priorityDot.fills = [solid(item.priority === "high" ? tokens.colors.semantic.error : tokens.colors.semantic.warning)];
+        row.appendChild(priorityDot);
+        row.appendChild(createInitialsAvatar(item.handle, avatarBgs[i % avatarBgs.length], tokens));
+        const userText = createTokenText(item.handle, tokens, "caption", "bold", tokens.colors.neutral["900"]);
+        userText.resize(90, userText.height);
+        row.appendChild(userText);
+        const reasonTag = createStatusPill(item.reason, tokens.colors.neutral["50"], tokens.colors.neutral["700"], tokens);
+        reasonTag.strokes = [solid(tokens.colors.neutral["200"])];
+        reasonTag.strokeWeight = 1;
+        reasonTag.layoutGrow = 1;
+        row.appendChild(reasonTag);
+        row.appendChild(createTokenText(item.wait, tokens, "caption", "regular", tokens.colors.neutral["500"]));
+        row.appendChild(createTokenText("Handle →", tokens, "caption", "regular", tokens.colors.semantic.info));
+        card.appendChild(row);
+    }
+    return card;
+}
+function createSyncStatusSection(tokens) {
+    const card = figma.createFrame();
+    card.name = "Sync Status";
+    card.layoutMode = "VERTICAL";
+    card.primaryAxisSizingMode = "FIXED";
+    card.counterAxisSizingMode = "FIXED";
+    card.resize(580, 190);
+    card.paddingTop = spacing(tokens, 3);
+    card.paddingBottom = spacing(tokens, 3);
+    card.paddingLeft = spacing(tokens, 3);
+    card.paddingRight = spacing(tokens, 3);
+    card.itemSpacing = spacing(tokens, 2);
+    card.cornerRadius = tokens.radius.md;
+    card.fills = [solid("#FFFFFF")];
+    card.strokes = [solid(tokens.colors.neutral["200"])];
+    card.strokeWeight = 1;
+    applyShadow(card, tokens, "cardSubtle");
+    const headerRow = createRow("header", spacing(tokens, 2));
+    headerRow.counterAxisAlignItems = "CENTER";
+    const heading = createTokenText("Sync Status", tokens, "label", "bold", tokens.colors.neutral["900"]);
+    heading.layoutGrow = 1;
+    headerRow.appendChild(heading);
+    headerRow.appendChild(createStatusPill("All systems operational", "#D1FAE5", tokens.colors.semantic.success, tokens));
+    card.appendChild(headerRow);
+    const statuses = [
+        { label: "Instagram API", detail: "Webhooks active", value: "Connected · 99.9%", ok: true },
+        { label: "n8n Webhook", detail: "Last event 2s ago", value: "Active", ok: true },
+        { label: "AI Model", detail: "GPT-4o · avg 1.2s", value: "Operational", ok: true },
+        { label: "Last Sync", detail: "All queues flushed", value: "Just now", ok: true }
+    ];
+    for (const s of statuses) {
+        const row = createRow("status row", spacing(tokens, 2));
+        row.counterAxisAlignItems = "CENTER";
+        const dot = figma.createEllipse();
+        dot.resize(10, 10);
+        dot.fills = [solid(s.ok ? tokens.colors.semantic.success : tokens.colors.semantic.error)];
+        row.appendChild(dot);
+        const labelCol = figma.createFrame();
+        labelCol.name = s.label;
+        labelCol.layoutMode = "VERTICAL";
+        labelCol.primaryAxisSizingMode = "AUTO";
+        labelCol.counterAxisSizingMode = "FIXED";
+        labelCol.resize(180, 32);
+        labelCol.fills = [];
+        labelCol.itemSpacing = 1;
+        labelCol.layoutGrow = 1;
+        labelCol.appendChild(createTokenText(s.label, tokens, "caption", "bold", tokens.colors.neutral["900"]));
+        labelCol.appendChild(createTokenText(s.detail, tokens, "caption", "regular", tokens.colors.neutral["500"]));
+        row.appendChild(labelCol);
+        row.appendChild(createTokenText(s.value, tokens, "caption", "bold", s.ok ? tokens.colors.semantic.success : tokens.colors.semantic.error));
+        card.appendChild(row);
+    }
+    return card;
+}
+function createStatePreviewsRow(tokens) {
+    // 3 × 374px + 2 × 16px gap ≈ 1156px inner width
+    const row = createHorizontalGroup([
+        createLoadingStateCard(tokens),
+        createEmptyStateCard(tokens),
+        createErrorStateCard(tokens)
+    ], spacing(tokens, 3));
+    row.name = "State Variations";
+    return row;
+}
+function createLoadingStateCard(tokens) {
+    const card = figma.createFrame();
+    card.name = "Loading State";
+    card.layoutMode = "VERTICAL";
+    card.primaryAxisSizingMode = "FIXED";
+    card.counterAxisSizingMode = "FIXED";
+    card.resize(374, 130);
+    card.paddingTop = spacing(tokens, 3);
+    card.paddingBottom = spacing(tokens, 3);
+    card.paddingLeft = spacing(tokens, 3);
+    card.paddingRight = spacing(tokens, 3);
+    card.itemSpacing = spacing(tokens, 2);
+    card.cornerRadius = tokens.radius.md;
+    card.fills = [solid("#FFFFFF")];
+    card.strokes = [solid(tokens.colors.neutral["200"])];
+    card.strokeWeight = 1;
+    applyShadow(card, tokens, "cardSubtle");
+    card.appendChild(createTokenText("Loading…", tokens, "caption", "bold", tokens.colors.neutral["500"]));
+    for (const w of [330, 260, 300]) {
+        const bar = figma.createFrame();
+        bar.name = "skeleton bar";
+        bar.resize(w, 10);
+        bar.cornerRadius = 999;
+        bar.fills = [solid(tokens.colors.neutral["200"])];
+        card.appendChild(bar);
+    }
+    return card;
+}
+function createEmptyStateCard(tokens) {
+    const card = figma.createFrame();
+    card.name = "Empty State";
+    card.layoutMode = "VERTICAL";
+    card.primaryAxisSizingMode = "FIXED";
+    card.counterAxisSizingMode = "FIXED";
+    card.resize(374, 130);
+    card.paddingTop = spacing(tokens, 3);
+    card.paddingBottom = spacing(tokens, 3);
+    card.paddingLeft = spacing(tokens, 3);
+    card.paddingRight = spacing(tokens, 3);
+    card.itemSpacing = spacing(tokens, 2);
+    card.primaryAxisAlignItems = "CENTER";
+    card.counterAxisAlignItems = "CENTER";
+    card.cornerRadius = tokens.radius.md;
+    card.fills = [solid(tokens.colors.neutral["50"])];
+    card.strokes = [solid(tokens.colors.neutral["200"])];
+    card.strokeWeight = 1;
+    const iconCircle = figma.createFrame();
+    iconCircle.name = "icon placeholder";
+    iconCircle.resize(32, 32);
+    iconCircle.cornerRadius = 999;
+    iconCircle.fills = [solid(tokens.colors.neutral["200"])];
+    card.appendChild(iconCircle);
+    card.appendChild(createTokenText("No conversations yet", tokens, "label", "bold", tokens.colors.neutral["700"]));
+    card.appendChild(createTokenText("Start a campaign to see data here.", tokens, "caption", "regular", tokens.colors.neutral["500"]));
+    return card;
+}
+function createErrorStateCard(tokens) {
+    const card = figma.createFrame();
+    card.name = "Error State";
+    card.layoutMode = "VERTICAL";
+    card.primaryAxisSizingMode = "FIXED";
+    card.counterAxisSizingMode = "FIXED";
+    card.resize(374, 130);
+    card.paddingTop = spacing(tokens, 3);
+    card.paddingBottom = spacing(tokens, 3);
+    card.paddingLeft = spacing(tokens, 3);
+    card.paddingRight = spacing(tokens, 3);
+    card.itemSpacing = spacing(tokens, 2);
+    card.primaryAxisAlignItems = "CENTER";
+    card.counterAxisAlignItems = "CENTER";
+    card.cornerRadius = tokens.radius.md;
+    card.fills = [solid("#FFF5F5")];
+    card.strokes = [solid(tokens.colors.semantic.error)];
+    card.strokeWeight = 1;
+    const iconCircle = figma.createFrame();
+    iconCircle.name = "error icon placeholder";
+    iconCircle.resize(32, 32);
+    iconCircle.cornerRadius = 999;
+    iconCircle.fills = [solid("#FEE2E2")];
+    card.appendChild(iconCircle);
+    card.appendChild(createTokenText("Failed to load", tokens, "label", "bold", tokens.colors.semantic.error));
+    card.appendChild(createTokenText("Check your connection and retry.", tokens, "caption", "regular", tokens.colors.neutral["500"]));
+    card.appendChild(createTokenText("→ Retry", tokens, "caption", "regular", tokens.colors.semantic.info));
+    return card;
+}
+function createStatusPill(text, bgHex, textHex, tokens) {
+    const pill = figma.createFrame();
+    pill.name = text;
+    pill.layoutMode = "HORIZONTAL";
+    pill.primaryAxisSizingMode = "AUTO";
+    pill.counterAxisSizingMode = "AUTO";
+    pill.paddingTop = 2;
+    pill.paddingBottom = 2;
+    pill.paddingLeft = spacing(tokens, 2);
+    pill.paddingRight = spacing(tokens, 2);
+    pill.cornerRadius = 999;
+    pill.fills = [solid(bgHex)];
+    pill.appendChild(createTokenText(text, tokens, "caption", "bold", textHex));
+    return pill;
+}
+function createInitialsAvatar(handle, bgHex, tokens) {
+    const avatar = figma.createFrame();
+    avatar.name = "avatar";
+    avatar.layoutMode = "HORIZONTAL";
+    avatar.primaryAxisSizingMode = "FIXED";
+    avatar.counterAxisSizingMode = "FIXED";
+    avatar.resize(28, 28);
+    avatar.cornerRadius = 999;
+    avatar.fills = [solid(bgHex)];
+    avatar.primaryAxisAlignItems = "CENTER";
+    avatar.counterAxisAlignItems = "CENTER";
+    avatar.appendChild(createTokenText(handle.replace("@", "").slice(0, 2).toUpperCase(), tokens, "caption", "bold", "#FFFFFF"));
+    return avatar;
+}
+function createOnboardingDraft(job, tokens) {
+    const issueKey = textOrFallback(job.issueKey, "No issue key");
+    const briefTitle = textOrFallback(job.briefTitle, "Untitled onboarding job");
+    const frame = figma.createFrame();
+    frame.name = `AI Onboarding - ${issueKey} - ${briefTitle}`;
+    frame.resize(1440, 900);
+    frame.fills = [solid(tokens.colors.neutral["50"])];
+    frame.layoutMode = "VERTICAL";
+    frame.primaryAxisSizingMode = "FIXED";
+    frame.counterAxisSizingMode = "FIXED";
+    frame.primaryAxisAlignItems = "CENTER";
+    frame.counterAxisAlignItems = "CENTER";
+    frame.itemSpacing = spacing(tokens, 4);
+    frame.paddingTop = spacing(tokens, 6);
+    frame.paddingBottom = spacing(tokens, 6);
+    frame.paddingLeft = spacing(tokens, 6);
+    frame.paddingRight = spacing(tokens, 6);
+    frame.appendChild(createOnboardingStepper(tokens));
+    frame.appendChild(createOnboardingCard(job, tokens));
+    const position = findNextFramePosition();
+    figma.currentPage.appendChild(frame);
+    frame.x = position.x;
+    frame.y = position.y;
+    return frame;
+}
+function createOnboardingStepper(tokens) {
+    const stepper = createRow("Progress stepper", spacing(tokens, 2));
+    stepper.counterAxisAlignItems = "CENTER";
+    const stepLabels = ["Account", "Profile", "Connect", "Done"];
+    for (let i = 0; i < stepLabels.length; i++) {
+        const dot = figma.createEllipse();
+        dot.name = `Step ${i + 1}`;
+        dot.resize(28, 28);
+        dot.fills = [solid(i === 0 ? tokens.colors.semantic.info : (i < 1 ? tokens.colors.semantic.success : tokens.colors.neutral["200"]))];
+        const stepGroup = createRow(`Step ${i + 1} group`, spacing(tokens, 1));
+        stepGroup.counterAxisAlignItems = "CENTER";
+        stepGroup.appendChild(dot);
+        stepGroup.appendChild(createTokenText(stepLabels[i], tokens, "caption", i === 0 ? "bold" : "regular", i === 0 ? tokens.colors.neutral["900"] : tokens.colors.neutral["500"]));
+        stepper.appendChild(stepGroup);
+        if (i < stepLabels.length - 1) {
+            const connector = figma.createFrame();
+            connector.name = "Connector";
+            connector.resize(48, 2);
+            connector.fills = [solid(tokens.colors.neutral["200"])];
+            stepper.appendChild(connector);
+        }
+    }
+    return stepper;
+}
+function createOnboardingCard(job, tokens) {
+    const card = figma.createFrame();
+    card.name = "Onboarding card";
+    card.layoutMode = "VERTICAL";
+    card.primaryAxisSizingMode = "AUTO";
+    card.counterAxisSizingMode = "FIXED";
+    card.resize(560, 500);
+    card.paddingTop = spacing(tokens, 6);
+    card.paddingBottom = spacing(tokens, 6);
+    card.paddingLeft = spacing(tokens, 6);
+    card.paddingRight = spacing(tokens, 6);
+    card.itemSpacing = spacing(tokens, 4);
+    card.cornerRadius = tokens.radius.lg;
+    card.fills = [solid("#FFFFFF")];
+    card.strokes = [solid(tokens.colors.neutral["200"])];
+    card.strokeWeight = 1;
+    applyShadow(card, tokens, "overlaySubtle");
+    const badge = createModeBadge("Onboarding", tokens);
+    card.appendChild(badge);
+    const heading = createTokenText(textOrFallback(job.briefTitle, "Welcome — let's get you set up"), tokens, "h1", "bold", tokens.colors.neutral["900"]);
+    heading.layoutAlign = "STRETCH";
+    card.appendChild(heading);
+    const description = createTokenText(truncateText(textOrFallback(job.objective, "Complete a few quick steps to activate your account."), 160), tokens, "body", "regular", tokens.colors.neutral["700"]);
+    description.layoutAlign = "STRETCH";
+    description.lineHeight = { value: 28, unit: "PIXELS" };
+    card.appendChild(description);
+    card.appendChild(createOnboardingFields(tokens));
+    card.appendChild(createPrimaryButton("Continue", tokens));
+    const skip = createTokenText("Skip for now", tokens, "label", "regular", tokens.colors.neutral["500"]);
+    skip.textAlignHorizontal = "CENTER";
+    card.appendChild(skip);
+    if (job.uxNotes || job.acceptanceCriteria) {
+        card.appendChild(createNoteCard(truncateText(textOrFallback(job.uxNotes || job.acceptanceCriteria, ""), 200), tokens));
+    }
+    return card;
+}
+function createOnboardingFields(tokens) {
+    const fields = figma.createFrame();
+    fields.name = "Form fields";
+    fields.layoutMode = "VERTICAL";
+    fields.primaryAxisSizingMode = "AUTO";
+    fields.counterAxisSizingMode = "FIXED";
+    fields.layoutAlign = "STRETCH";
+    fields.fills = [];
+    fields.itemSpacing = spacing(tokens, 2);
+    const fieldLabels = ["Business name", "Instagram handle"];
+    for (const label of fieldLabels) {
+        const wrapper = figma.createFrame();
+        wrapper.name = label;
+        wrapper.layoutMode = "VERTICAL";
+        wrapper.primaryAxisSizingMode = "AUTO";
+        wrapper.counterAxisSizingMode = "FIXED";
+        wrapper.layoutAlign = "STRETCH";
+        wrapper.fills = [];
+        wrapper.itemSpacing = spacing(tokens, 1);
+        wrapper.appendChild(createTokenText(label, tokens, "label", "bold", tokens.colors.neutral["700"]));
+        const input = figma.createFrame();
+        input.name = `${label} input`;
+        input.layoutMode = "HORIZONTAL";
+        input.primaryAxisSizingMode = "FIXED";
+        input.counterAxisSizingMode = "FIXED";
+        input.layoutAlign = "STRETCH";
+        input.resize(464, 40);
+        input.paddingTop = spacing(tokens, 2);
+        input.paddingBottom = spacing(tokens, 2);
+        input.paddingLeft = spacing(tokens, 3);
+        input.paddingRight = spacing(tokens, 3);
+        input.counterAxisAlignItems = "CENTER";
+        input.cornerRadius = tokens.radius.sm;
+        input.fills = [solid("#FFFFFF")];
+        input.strokes = [solid(tokens.colors.neutral["200"])];
+        input.strokeWeight = 1;
+        input.appendChild(createTokenText(`Enter your ${label.toLowerCase()}`, tokens, "body", "regular", tokens.colors.neutral["500"]));
+        wrapper.appendChild(input);
+        fields.appendChild(wrapper);
+    }
+    return fields;
 }
 function createDesignSystemDraft(job, tokens) {
     const issueKey = textOrFallback(job.issueKey, "No issue key");
@@ -599,88 +2182,89 @@ function findNextFramePosition() {
     }
     return { x: rightmost + 200, y: 0 };
 }
-function isDesignSystemJob(job) {
-    const titleAndObjective = [job.briefTitle, job.objective]
-        .filter(Boolean).join(" ").toLowerCase();
-    const allText = [
+function jobSearchText(job) {
+    return [
         job.briefTitle,
         job.objective,
         job.figmaInstruction,
         job.requiredSections,
         job.acceptanceCriteria
-    ].filter(Boolean).join(" ").toLowerCase();
-    const strongIndicators = [
+    ].join(" ").toLowerCase();
+}
+function matchesKeywords(text, keywords) {
+    for (const keyword of keywords) {
+        if (text.indexOf(keyword) >= 0) {
+            return true;
+        }
+    }
+    return false;
+}
+function isDesignSystemJob(job) {
+    const titleText = String(job.briefTitle || job.title || "").toLowerCase();
+    const objectiveText = String(job.objective || "").toLowerCase();
+    const combinedText = [
+        job.issueKey,
+        job.briefTitle,
+        job.title,
+        job.objective,
+        job.figmaInstruction,
+        job.requiredSections,
+        job.acceptanceCriteria,
+        job.targetUser
+    ].join(" ").toLowerCase();
+    const hardScreenIndicators = [
+        "screen draft",
+        "screen scaffold",
+        "product screen",
+        "dashboard",
+        "dashboard overview",
+        "conversation dashboard",
+        "onboarding screen",
+        "settings screen",
+        "pricing screen"
+    ];
+    const hardDesignSystemTitleIndicators = [
         "create design system",
         "build design system",
         "define design system",
         "design system foundation",
         "design system scaffold",
-        "design foundation",
-        "style guide",
-        "component library foundation",
         "initial figma design system rules",
         "design system rules"
     ];
-    const matchedIndicators = strongIndicators.filter(function (ind) {
-        return titleAndObjective.indexOf(ind) >= 0;
-    });
-    const dsSectionGroups = [
-        ["color system"],
-        ["typography scale"],
-        ["spacing system"],
-        ["layout & grid rules", "layout and grid rules"],
-        ["radius & shadow rules", "radius and shadow rules"],
-        ["component foundation"],
-        ["button rules"],
-        ["input/form rules", "input form rules"],
-        ["card/container rules", "card container rules"],
-        ["state rules"],
-        ["figma naming convention"],
-        ["ai usage rules"],
-        ["draft note"]
-    ];
-    const matchedSectionCount = dsSectionGroups.filter(function (group) {
-        return group.some(function (variant) { return allText.indexOf(variant) >= 0; });
-    }).length;
-    const negativeIndicators = [
-        "not a design system",
-        "is not a design system",
-        "not design system",
-        "no design system",
-        "not for design system",
-        "screen draft",
-        "product screen",
-        "feature screen",
-        "app screen",
-        "mobile screen",
-        "web screen",
-        "ui screen",
-        "create a screen",
-        "create the screen",
-        "design a screen",
-        "build a screen",
-        "create a page",
-        "design a page",
-        "landing page",
-        "onboarding screen",
-        "onboarding flow",
-        "product page",
-        "feature page"
-    ];
-    const matchedNegatives = negativeIndicators.filter(function (ind) {
-        return titleAndObjective.indexOf(ind) >= 0;
-    });
-    const hasPositive = matchedIndicators.length > 0 || matchedSectionCount >= 4;
-    const result = hasPositive && matchedNegatives.length === 0;
-    console.log("[isDesignSystemJob]", {
-        briefTitle: job.briefTitle,
-        objective: (job.objective || "").substring(0, 80),
-        matchedIndicators: matchedIndicators,
-        matchedNegatives: matchedNegatives,
-        matchedSectionCount: matchedSectionCount,
-        mode: result ? "design-system" : "screen"
-    });
+    const hardScreenMatches = hardScreenIndicators.filter(k => titleText.indexOf(k) >= 0);
+    const hardDsTitleMatches = hardDesignSystemTitleIndicators.filter(k => titleText.indexOf(k) >= 0);
+    console.log(`[DS] titleText: "${titleText}"`);
+    console.log(`[DS] objectiveText: "${objectiveText}"`);
+    console.log(`[DS] hardScreenMatches: ${JSON.stringify(hardScreenMatches)}`);
+    console.log(`[DS] hardDesignSystemTitleMatches: ${JSON.stringify(hardDsTitleMatches)}`);
+    if (hardScreenMatches.length > 0 && hardDsTitleMatches.length === 0) {
+        console.log("[DS] final mode: Screen Draft (hard screen override matched)");
+        return false;
+    }
+    if (objectiveText.indexOf("product screen draft") >= 0 ||
+        objectiveText.indexOf("dashboard screen") >= 0 ||
+        objectiveText.indexOf("dashboard overview") >= 0) {
+        console.log("[DS] final mode: Screen Draft (objective screen override matched)");
+        return false;
+    }
+    const explicitMatches = designSystemExplicitKeywords.filter(k => combinedText.indexOf(k) >= 0);
+    const sectionMatches = designSystemSectionKeywords.filter(k => combinedText.indexOf(k) >= 0);
+    const screenMatches = screenDraftNegativeKeywords.filter(k => combinedText.indexOf(k) >= 0);
+    console.log(`[DS] positive DS indicators matched: ${JSON.stringify(explicitMatches)}`);
+    console.log(`[DS] DS section count: ${sectionMatches.length} (${JSON.stringify(sectionMatches)})`);
+    const hasExplicitIntent = explicitMatches.length > 0;
+    const hasManySections = sectionMatches.length >= 4;
+    const hasScreenSignal = screenMatches.length > 0;
+    const result = (hasExplicitIntent || hasManySections) && !hasScreenSignal;
+    console.log(`[DS] final mode: ${result ? "Design System" : "Screen Draft"}`);
     return result;
+}
+function isDashboardJob(job) {
+    return matchesKeywords(jobSearchText(job), dashboardKeywords);
+}
+function isOnboardingJob(job) {
+    return matchesKeywords(jobSearchText(job), onboardingKeywords);
 }
 function normalizeTokens(tokens) {
     if (!tokens) {
@@ -720,6 +2304,32 @@ function normalizeTokens(tokens) {
         states: Array.isArray(tokens.states) && tokens.states.length ? tokens.states : fallbackTokens.states,
         figmaNaming: Array.isArray(tokens.figmaNaming) && tokens.figmaNaming.length ? tokens.figmaNaming : fallbackTokens.figmaNaming,
         aiUsageRules: Array.isArray(tokens.aiUsageRules) && tokens.aiUsageRules.length ? tokens.aiUsageRules : fallbackTokens.aiUsageRules
+    };
+}
+function normalizeJob(job) {
+    const dp = job.designPlan;
+    if (!dp)
+        return job;
+    const str = (v) => {
+        if (typeof v === "string" && v.trim().length > 0)
+            return v.trim();
+        return undefined;
+    };
+    const arrStr = (v) => {
+        if (Array.isArray(v)) {
+            const joined = v.filter((x) => typeof x === "string").join(", ");
+            return joined.length > 0 ? joined : undefined;
+        }
+        return str(v);
+    };
+    return {
+        ...job,
+        briefTitle: job.briefTitle || str(dp.briefTitle),
+        objective: job.objective || str(dp.objective),
+        targetUser: job.targetUser || str(dp.targetUser),
+        figmaInstruction: job.figmaInstruction || str(dp.figmaInstruction),
+        requiredSections: job.requiredSections || arrStr(dp.requiredSections),
+        requiredStates: job.requiredStates || arrStr(dp.requiredStates)
     };
 }
 function textStyle(tokens, name) {

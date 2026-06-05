@@ -23,6 +23,16 @@ Mode detection is automatic. The plugin checks the pending job brief fields, inc
 
 If those fields contain design-system keywords such as `design system`, `design foundation`, `style guide`, `color rules`, `typography rules`, `spacing rules`, `component rules`, `Figma naming`, or `AI usage rules`, the job is treated as `Design System` mode. Otherwise, it uses `Screen Draft` mode.
 
+## Design Tokens
+
+The plugin fetches design tokens from:
+
+```text
+{BACKEND_BASE_URL}/design-system/tokens
+```
+
+The token registry is used as the visual source of truth for generated screen drafts and design system foundation drafts. The plugin UI shows token status as `loaded` when the registry is available and `fallback` when it uses the local MVP token fallback.
+
 ## Build
 
 Install dependencies from this folder:

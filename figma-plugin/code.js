@@ -289,11 +289,15 @@ function renderDesignPlan(job, designPlan, tokens) {
     setPadding(frame, spacing(tokens, 7));
     frame.itemSpacing = spacing(tokens, 5);
     frame.appendChild(createDesignPlanHeader(issueKey, planTitle, objective, targetUser, layoutPattern, tokens));
-    const blocksToRender = contentBlocks.length > 0
+    let blocksToRender = contentBlocks.length > 0
         ? contentBlocks
         : getDefaultBlocksForPattern(layoutPattern);
     if (contentBlocks.length === 0) {
         console.log(`[renderDesignPlan] no contentBlocks — generating defaults for layoutPattern: ${layoutPattern}`);
+    }
+    if (layoutPattern === "dashboard_overview") {
+        blocksToRender = sortBlocksForDashboard(blocksToRender);
+        console.log(`[renderDesignPlan] sorted blocks for dashboard_overview: ${blocksToRender.map(b => b.type).join(", ")}`);
     }
     for (const block of blocksToRender) {
         frame.appendChild(renderContentBlock(block, tokens));
@@ -310,8 +314,14 @@ function getDefaultBlocksForPattern(layoutPattern) {
         case "dashboard_overview":
             return [
                 { type: "pageHeader", title: "Dashboard", description: "Overview of key metrics and activity." },
-                { type: "metricCards", title: "Key Metrics", items: [] },
-                { type: "tableSection", title: "Recent Activity" }
+                { type: "metricCards", title: "Key Metrics", items: [
+                        { label: "Total Items", value: "—", description: "" },
+                        { label: "Active", value: "—", description: "" },
+                        { label: "This Week", value: "—", description: "" },
+                        { label: "Growth", value: "—", description: "" }
+                    ] },
+                { type: "tableSection", title: "Recent Activity", columns: ["Name", "Status", "Date", "Value"] },
+                { type: "emptyState", title: "No data yet", description: "Activity will appear here once available." }
             ];
         case "settings_page":
             return [
@@ -357,6 +367,25 @@ function getDefaultBlocksForPattern(layoutPattern) {
                 { type: "emptyState", title: "No items yet", description: "Content will appear here." }
             ];
     }
+}
+function sortBlocksForDashboard(blocks) {
+    const typePriority = {
+        summaryHeader: 0,
+        heroSection: 1,
+        pageHeader: 2,
+        metricCards: 3,
+        tableSection: 4,
+        emptyState: 5,
+        loadingState: 6,
+        errorState: 7,
+        successState: 8
+    };
+    return [...blocks].sort((a, b) => {
+        var _a, _b;
+        const ap = (_a = typePriority[typeof a.type === "string" ? a.type : ""]) !== null && _a !== void 0 ? _a : 99;
+        const bp = (_b = typePriority[typeof b.type === "string" ? b.type : ""]) !== null && _b !== void 0 ? _b : 99;
+        return ap - bp;
+    });
 }
 function renderContentBlock(block, tokens) {
     const blockType = typeof block.type === "string" ? block.type : "genericContentBlock";
@@ -495,41 +524,85 @@ function renderTableSectionBlock(block, tokens) {
     const title = blockStr(block, "title") || "Table";
     const columns = blockArr(block, "columns");
     const colNames = columns.length > 0
-        ? columns.map(c => typeof c === "string" ? c : String(c.label || c.name || "—"))
+        ? columns.map(c => typeof c === "string" ? c : String(c.label || c.name || "Col"))
         : ["Name", "Status", "Date", "Value"];
+    const sampleRows = [
+        ["Alpha project", "Active", "Jun 2026", "1,200"],
+        ["Beta initiative", "Pending", "Jun 2026", "800"],
+        ["Gamma task", "Done", "May 2026", "3,400"],
+        ["Delta item", "Active", "May 2026", "950"],
+        ["Epsilon task", "Pending", "Apr 2026", "2,100"]
+    ];
+    // Available width: 1440 frame - 2×spacing[7] padding - 2×container spacing[4] padding
+    const framePad = spacing(tokens, 7);
+    const contPad = spacing(tokens, 4);
+    const availableWidth = 1440 - 2 * framePad - 2 * contPad;
+    const colGap = spacing(tokens, 3);
+    const colCount = colNames.length;
+    const colWidth = Math.floor((availableWidth - (colCount - 1) * colGap) / colCount);
+    console.log(`[table] block type: tableSection`);
+    console.log(`[table] column count: ${colCount}`);
+    console.log(`[table] row count: ${sampleRows.length}`);
+    console.log(`[table] available width: ${availableWidth}px`);
+    console.log(`[table] final column width: ${colWidth}px each`);
     const container = createBlockContainer(title, tokens);
     const heading = createTokenText(title, tokens, "h2", "bold", tokens.colors.neutral["900"]);
     heading.layoutAlign = "STRETCH";
     container.appendChild(heading);
-    const headerRow = createRow("Table header", spacing(tokens, 3));
-    headerRow.layoutAlign = "STRETCH";
-    for (const col of colNames) {
-        const cell = createTokenText(col, tokens, "caption", "bold", tokens.colors.neutral["500"]);
-        cell.layoutGrow = 1;
-        headerRow.appendChild(cell);
-    }
+    const headerRow = buildTableRow("Table header", colNames, colWidth, colGap, "caption", "bold", tokens.colors.neutral["500"], tokens);
+    headerRow.paddingBottom = spacing(tokens, 2);
     container.appendChild(headerRow);
-    const divider = figma.createFrame();
-    divider.name = "Table header divider";
-    divider.primaryAxisSizingMode = "FIXED";
-    divider.counterAxisSizingMode = "FIXED";
-    divider.layoutAlign = "STRETCH";
-    divider.resize(100, 1);
-    divider.fills = [solid(tokens.colors.neutral["200"])];
-    container.appendChild(divider);
-    const rowCount = Math.min(5, Math.max(3, blockArr(block, "rows").length || 3));
+    const headerDivider = buildTableDivider(tokens.colors.neutral["200"]);
+    headerDivider.layoutAlign = "STRETCH";
+    container.appendChild(headerDivider);
+    const rowCount = Math.min(5, Math.max(3, blockArr(block, "rows").length || 4));
     for (let r = 0; r < rowCount; r++) {
-        const tableRow = createRow(`Row ${r + 1}`, spacing(tokens, 3));
-        tableRow.layoutAlign = "STRETCH";
-        tableRow.fills = r % 2 === 0 ? [] : [solid(tokens.colors.neutral["50"])];
-        for (let ci = 0; ci < colNames.length; ci++) {
-            const cell = createTokenText("—", tokens, "body", "regular", tokens.colors.neutral["700"]);
-            cell.layoutGrow = 1;
-            tableRow.appendChild(cell);
+        const rawRow = sampleRows[r] || [];
+        const values = [];
+        for (let ci = 0; ci < colCount; ci++) {
+            values.push(rawRow[ci] !== undefined ? rawRow[ci] : "—");
+        }
+        const tableRow = buildTableRow(`Row ${r + 1}`, values, colWidth, colGap, "body", "regular", tokens.colors.neutral["700"], tokens);
+        tableRow.paddingTop = spacing(tokens, 2);
+        tableRow.paddingBottom = spacing(tokens, 2);
+        if (r % 2 !== 0) {
+            tableRow.fills = [solid(tokens.colors.neutral["50"])];
         }
         container.appendChild(tableRow);
+        if (r < rowCount - 1) {
+            const rowDivider = buildTableDivider(tokens.colors.neutral["200"]);
+            rowDivider.layoutAlign = "STRETCH";
+            container.appendChild(rowDivider);
+        }
     }
     return container;
+}
+function buildTableRow(name, values, colWidth, colGap, textStyleName, weight, color, tokens) {
+    const row = figma.createFrame();
+    row.name = name;
+    row.layoutMode = "HORIZONTAL";
+    row.primaryAxisSizingMode = "AUTO";
+    row.counterAxisSizingMode = "AUTO";
+    row.layoutAlign = "STRETCH";
+    row.fills = [];
+    row.itemSpacing = colGap;
+    row.counterAxisAlignItems = "CENTER";
+    for (const val of values) {
+        const text = createTokenText(val, tokens, textStyleName, weight, color);
+        text.textAutoResize = "HEIGHT";
+        text.resize(colWidth, 20);
+        row.appendChild(text);
+    }
+    return row;
+}
+function buildTableDivider(colorHex) {
+    const divider = figma.createFrame();
+    divider.name = "Row divider";
+    divider.primaryAxisSizingMode = "FIXED";
+    divider.counterAxisSizingMode = "FIXED";
+    divider.resize(100, 1);
+    divider.fills = [solid(colorHex)];
+    return divider;
 }
 function renderFormSectionBlock(block, tokens) {
     const title = blockStr(block, "title") || "Form";
@@ -825,20 +898,25 @@ function createGenericMetricCard(label, value, description, tokens) {
     card.name = label;
     card.layoutMode = "VERTICAL";
     card.primaryAxisSizingMode = "AUTO";
-    card.counterAxisSizingMode = "FIXED";
-    card.resize(280, 100);
-    card.paddingTop = spacing(tokens, 3);
-    card.paddingBottom = spacing(tokens, 3);
-    card.paddingLeft = spacing(tokens, 3);
-    card.paddingRight = spacing(tokens, 3);
-    card.itemSpacing = spacing(tokens, 1);
+    card.counterAxisSizingMode = "AUTO";
+    card.layoutGrow = 1;
+    card.layoutAlign = "STRETCH";
+    card.paddingTop = spacing(tokens, 4);
+    card.paddingBottom = spacing(tokens, 4);
+    card.paddingLeft = spacing(tokens, 4);
+    card.paddingRight = spacing(tokens, 4);
+    card.itemSpacing = spacing(tokens, 2);
     card.cornerRadius = tokens.radius.md;
     card.fills = [solid("#FFFFFF")];
     card.strokes = [solid(tokens.colors.neutral["200"])];
     card.strokeWeight = 1;
     applyShadow(card, tokens, "cardSubtle");
-    card.appendChild(createTokenText(label, tokens, "caption", "regular", tokens.colors.neutral["500"]));
-    card.appendChild(createTokenText(value, tokens, "h2", "bold", tokens.colors.neutral["900"]));
+    const labelText = createTokenText(label, tokens, "caption", "regular", tokens.colors.neutral["500"]);
+    labelText.layoutAlign = "STRETCH";
+    card.appendChild(labelText);
+    const valueText = createTokenText(value, tokens, "h1", "bold", tokens.colors.neutral["900"]);
+    valueText.layoutAlign = "STRETCH";
+    card.appendChild(valueText);
     if (description) {
         const descText = createTokenText(truncateText(description, 60), tokens, "caption", "regular", tokens.colors.neutral["500"]);
         descText.layoutAlign = "STRETCH";

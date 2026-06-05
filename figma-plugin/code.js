@@ -1,4 +1,13 @@
 "use strict";
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
 const fallbackTokens = {
     colors: {
         brand: { primary: "#111827" },
@@ -156,17 +165,17 @@ const regularFont = { family: "Inter", style: "Regular" };
 const boldFont = { family: "Inter", style: "Bold" };
 figma.showUI(__html__, { width: 420, height: 640, themeColors: true });
 console.log("PLUGIN VERSION: strict-detection-v3");
-figma.ui.onmessage = async (message) => {
+figma.ui.onmessage = (message) => __awaiter(void 0, void 0, void 0, function* () {
     if (message.type === "fetch-request") {
-        await handleFetchRequest(message);
+        yield handleFetchRequest(message);
         return;
     }
     if (message.type !== "create-draft") {
         return;
     }
     try {
-        await figma.loadFontAsync(regularFont);
-        await figma.loadFontAsync(boldFont);
+        yield figma.loadFontAsync(regularFont);
+        yield figma.loadFontAsync(boldFont);
         const tokens = normalizeTokens(message.tokens);
         const job = normalizeJob(message.job);
         const designPlan = job.designPlan;
@@ -221,40 +230,42 @@ figma.ui.onmessage = async (message) => {
             reason
         });
     }
-};
-async function handleFetchRequest(message) {
-    try {
-        const headers = {
-            "ngrok-skip-browser-warning": "1"
-        };
-        const messageHeaders = message.headers ? message.headers : {};
-        for (const key in messageHeaders) {
-            headers[key] = messageHeaders[key];
+});
+function handleFetchRequest(message) {
+    return __awaiter(this, void 0, void 0, function* () {
+        try {
+            const headers = {
+                "ngrok-skip-browser-warning": "1"
+            };
+            const messageHeaders = message.headers ? message.headers : {};
+            for (const key in messageHeaders) {
+                headers[key] = messageHeaders[key];
+            }
+            const init = {
+                method: message.method ? message.method : "GET",
+                headers
+            };
+            if (message.body !== undefined) {
+                init.body = message.body;
+            }
+            const response = yield fetch(message.url, init);
+            const text = yield response.text();
+            figma.ui.postMessage({
+                type: "fetch-response",
+                requestId: message.requestId,
+                ok: response.ok,
+                status: response.status,
+                text
+            });
         }
-        const init = {
-            method: message.method ? message.method : "GET",
-            headers
-        };
-        if (message.body !== undefined) {
-            init.body = message.body;
+        catch (error) {
+            figma.ui.postMessage({
+                type: "fetch-response",
+                requestId: message.requestId,
+                error: getErrorMessage(error)
+            });
         }
-        const response = await fetch(message.url, init);
-        const text = await response.text();
-        figma.ui.postMessage({
-            type: "fetch-response",
-            requestId: message.requestId,
-            ok: response.ok,
-            status: response.status,
-            text
-        });
-    }
-    catch (error) {
-        figma.ui.postMessage({
-            type: "fetch-response",
-            requestId: message.requestId,
-            error: getErrorMessage(error)
-        });
-    }
+    });
 }
 // ─── Generic Design Plan Renderer ────────────────────────────────────────────
 function renderDesignPlan(job, designPlan, tokens) {
@@ -2322,15 +2333,7 @@ function normalizeJob(job) {
         }
         return str(v);
     };
-    return {
-        ...job,
-        briefTitle: job.briefTitle || str(dp.briefTitle),
-        objective: job.objective || str(dp.objective),
-        targetUser: job.targetUser || str(dp.targetUser),
-        figmaInstruction: job.figmaInstruction || str(dp.figmaInstruction),
-        requiredSections: job.requiredSections || arrStr(dp.requiredSections),
-        requiredStates: job.requiredStates || arrStr(dp.requiredStates)
-    };
+    return Object.assign(Object.assign({}, job), { briefTitle: job.briefTitle || str(dp.briefTitle), objective: job.objective || str(dp.objective), targetUser: job.targetUser || str(dp.targetUser), figmaInstruction: job.figmaInstruction || str(dp.figmaInstruction), requiredSections: job.requiredSections || arrStr(dp.requiredSections), requiredStates: job.requiredStates || arrStr(dp.requiredStates) });
 }
 function textStyle(tokens, name) {
     const style = tokens.typography[name];
